@@ -84,6 +84,16 @@ function znapzendParseDestination(x) {
     return obj;
 }
 
+function replicationEscapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, character => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+    })[character]);
+}
+
 function FnModalReplicationTaskCreate(pool, filesystem) {
     let modal = {
         window: ""
@@ -119,6 +129,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
     let mBufferSize;
     let destination;
     let loadError = "";
+    let localPoolNames = [pool.name];
 
     if (filesystem.replicationtask) {
         try {
@@ -154,6 +165,17 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
             FnDisplayAlert({ status: "danger", title: "Replication task could not be loaded", description: "Open Review & Logs for details.", breakword: false }, { name: "replicationtask-configure" });
         }
     }
+
+    try {
+        let poolList = await cockpit.spawn(['/sbin/zpool', 'list', '-H', '-o', 'name'], { err: "out", superuser: "try" });
+        localPoolNames = poolList.split('\n').map(name => name.trim()).filter(Boolean);
+        if (!localPoolNames.includes(pool.name)) localPoolNames.push(pool.name);
+    } catch (error) {
+        // Keep the current pool available when the complete pool list cannot be loaded.
+    }
+
+    localPoolNames = [...new Set(localPoolNames)].sort();
+    let localPoolOptions = localPoolNames.map(name => `<option value="${replicationEscapeHtml(name)}">${replicationEscapeHtml(name)}</option>`).join('');
 
     modal.content = `
         <div class="modal-dialog modal-lg replication-ct-dialog">
@@ -315,7 +337,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         </div>
                         <label class="control-label replication-ct-local-destination-${filesystem.id}">Destination pool</label>
                         <div class="ct-validation-wrapper replication-ct-local-destination-${filesystem.id}">
-                            <select id="select-storagepool-replication-task-dst-pool-${filesystem.id}" class="form-control privileged-modal"></select>
+                            <select id="select-storagepool-replication-task-dst-pool-${filesystem.id}" class="form-control privileged-modal">${localPoolOptions}</select>
                             <span class="help-block">Select one of the pools currently imported on this server.</span>
                         </div>
                         <label id="label-storagepool-replication-task-dst-dataset-${filesystem.id}" class="control-label">Dataset inside destination pool</label>
@@ -600,15 +622,8 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                 }
 
                 function replicationLoadLocalPools() {
-                    let names = [];
-                    $("#table-storagepools tr[data-pool-name]").each((i, row) => {
-                        let name = $(row).attr("data-pool-name");
-                        if (name && !names.includes(name)) names.push(name);
-                    });
-                    if (!names.includes("${pool.name}")) names.push("${pool.name}");
-
-                    let select = $("#select-storagepool-replication-task-dst-pool-${filesystem.id}").empty();
-                    names.sort().forEach(name => select.append($("<option>").val(name).text(name)));
+                    let select = $("#select-storagepool-replication-task-dst-pool-${filesystem.id}");
+                    let names = select.find("option").map((i, option) => option.value).get();
 
                     let configuredDataset = $("#input-storagepool-replication-task-dst-dataset-${filesystem.id}").val().trim();
                     let configuredPool = configuredDataset.split("/")[0];
