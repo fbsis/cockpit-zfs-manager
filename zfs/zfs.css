@@ -122,6 +122,45 @@ fieldset[disabled] .btn {
     width: 1.25rem;
 }
 
+.filesystem-ct-columns .dropdown-menu label {
+    display: block;
+    margin: 0;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.filesystem-ct-columns .dropdown-menu label:hover {
+    background: var(--pf-global--BackgroundColor--light-300);
+}
+
+.filesystem-ct-columns .dropdown-menu input {
+    margin-right: 0.4rem;
+}
+
+.filesystem-ct-usage {
+    min-width: 10rem;
+}
+
+.filesystem-ct-usage .progress {
+    position: relative;
+    height: 1.5rem;
+    margin: 0;
+}
+
+.filesystem-ct-usage-value {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--pf-global--Color--100);
+    font-size: 0.7rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
 .replication-ct-steps {
     display: flex;
     margin: 0 0 1.5rem;

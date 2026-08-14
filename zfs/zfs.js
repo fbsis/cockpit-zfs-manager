@@ -196,6 +196,16 @@ $(document).on("click", "#btn-storagepools-refresh", function () {
     FnStoragePoolsGet();
 });
 
+$(document).on("click", ".filesystem-ct-columns .dropdown-menu", function (event) {
+    event.stopPropagation();
+});
+
+$(document).on("change", ".filesystem-ct-column-toggle", function () {
+    let poolId = $(this).attr("data-pool-id");
+    let column = $(this).attr("data-column");
+    $("#table-storagepool-filesystems-" + poolId + " .filesystem-ct-column-" + column).toggleClass("hidden", !this.checked);
+});
+
 $(document).on("click", "#table-storagepools > tbody > tr.listing-ct-item", function (element) {
     if (!$(this).hasClass("listing-ct-storagepoolsnotfound") && !$(element.target).is("a, button, .fa.fa-ellipsis-v, input")) {
         if (!$(this).parent().hasClass("open")) {
@@ -1331,6 +1341,17 @@ function FnStoragePoolsGetCommand(process = { data, message }) {
                                             </div>
 										    <div class="panel-actions panel-ct-actions">
 											    <button id="btn-storagepool-filesystems-create-` + pool.id + `" class="btn btn-primary privileged` + (pool.readonly ? " disabled" : "") + `" data-target="#modal-storagepool-filesystems-create-` + pool.id + `" data-toggle="modal" tabIndex="-1" type="button">Create Filesystem</button>
+											    <div class="btn-group dropdown filesystem-ct-columns">
+											        <button class="btn btn-default dropdown-toggle" data-toggle="dropdown" type="button">Columns <span class="caret"></span></button>
+											        <ul class="dropdown-menu dropdown-menu-right">
+                                                            <li><label><input class="filesystem-ct-column-toggle" data-column="refreservation" data-pool-id="` + pool.id + `" type="checkbox"> Refreservation</label></li>
+                                                            <li><label><input class="filesystem-ct-column-toggle" data-column="recordsize" data-pool-id="` + pool.id + `" type="checkbox"> Record Size</label></li>
+                                                            <li><label><input class="filesystem-ct-column-toggle" data-column="compression" data-pool-id="` + pool.id + `" type="checkbox"> Compression</label></li>
+                                                            <li><label><input class="filesystem-ct-column-toggle" data-column="deduplication" data-pool-id="` + pool.id + `" type="checkbox"> Deduplication</label></li>
+                                                            <li><label><input class="filesystem-ct-column-toggle" data-column="share" data-pool-id="` + pool.id + `" type="checkbox"> Share</label></li>
+                                                            <li><label><input class="filesystem-ct-column-toggle" data-column="mounted" data-pool-id="` + pool.id + `" type="checkbox"> Mounted</label></li>
+                                                        </ul>
+											    </div>
 											    <button id="btn-storagepool-filesystems-refresh-` + pool.id + `" class="btn btn-default" tabIndex="-1" type="button">Refresh</button>
 										    </div>
 										</div>
@@ -1338,15 +1359,14 @@ function FnStoragePoolsGetCommand(process = { data, message }) {
 										    <thead>
 											    <tr>
 											        <th colspan="2">Name</th>
-											        <th>Available</th>
-											        <th>Used</th>
-											        <th>Snapshots</th>
-                                                    <th>Refreservation</th>
-											        <th>Record Size</th>
-											        <th>Compression</th>
-											        <th>Deduplication</th>
-											        <th>Share</th>
-											        <th>Mounted</th>
+										        <th>Usage</th>
+										        <th>Snapshots</th>
+                                                    <th class="filesystem-ct-column-refreservation hidden">Refreservation</th>
+										        <th class="filesystem-ct-column-recordsize hidden">Record Size</th>
+										        <th class="filesystem-ct-column-compression hidden">Compression</th>
+										        <th class="filesystem-ct-column-deduplication hidden">Deduplication</th>
+										        <th class="filesystem-ct-column-share hidden">Share</th>
+										        <th class="filesystem-ct-column-mounted hidden">Mounted</th>
                                                     <th>Replication</th>
 											        <th class="listing-ct-icon"></th>
 											        <th class="listing-ct-icon"></th>
@@ -4985,11 +5005,13 @@ async function FnFileSystemsGetCommand(pool = { name, id, altroot: false, boot: 
 
                     break;
                 case 2: //2=avail
-                    filesystem.output += `<td><span class="table-ct-head">Available:</span>` + FnFormatBytes({ base2: true, decimals: 2, value: __value }) + `</td>`;
+                    filesystem.availraw = Number(__value) || 0;
 
                     break;
                 case 3: //3=used
-                    filesystem.output += `<td><span class="table-ct-head">Used:</span>` + FnFormatBytes({ base2: true, decimals: 2, value: __value }) + `</td>`;
+                    filesystem.usedraw = Number(__value) || 0;
+                    filesystem.usedpercent = Math.min(100, Math.max(0, FnRound({ decimals: 1, value: (filesystem.usedraw / (filesystem.usedraw + filesystem.availraw || 1)) * 100 })));
+                    filesystem.output += `<td><span class="table-ct-head">Usage:</span><div class="filesystem-ct-usage"><div class="progress progress-sm"><div id="progressbar-filesystem-used-` + filesystem.id + `" aria-valuemax="100" aria-valuemin="0" aria-valuenow="` + filesystem.usedpercent + `" class="progress-bar" role="progressbar"></div><span class="filesystem-ct-usage-value">` + filesystem.usedpercent + `% · ` + FnFormatBytes({ base2: true, decimals: 1, value: filesystem.usedraw }) + ` / ` + FnFormatBytes({ base2: true, decimals: 1, value: filesystem.usedraw + filesystem.availraw }) + `</span></div></div></td>`;
 
                     break;
                 case 4: //4=usedsnap
@@ -5009,7 +5031,7 @@ async function FnFileSystemsGetCommand(pool = { name, id, altroot: false, boot: 
                         __value = FnFormatBytes({ base2: true, decimals: 2, value: __value });
                     }
 
-                    filesystem.output += `<td><span class="table-ct-head">Refreservation:</span>` + __value + `</td>`;
+                    filesystem.output += `<td class="filesystem-ct-column-refreservation hidden"><span class="table-ct-head">Refreservation:</span>` + __value + `</td>`;
 
                     break;
                 case 6: //6=recordsize
@@ -5017,7 +5039,7 @@ async function FnFileSystemsGetCommand(pool = { name, id, altroot: false, boot: 
                     // if(zfsmanager.user.smb && !zfsmanager.user.admin && !zfsmanager.user.zfs){
                     //    filesystem.output += `<td><span class="table-ct-head">Record Size:</span>` + "N/A" + `</td>`;
                     // } else {
-                    filesystem.output += `<td><span class="table-ct-head">Record Size:</span>` + FnFormatBytes({ base2: true, decimals: 0, value: __value }) + `</td>`;
+                    filesystem.output += `<td class="filesystem-ct-column-recordsize hidden"><span class="table-ct-head">Record Size:</span>` + FnFormatBytes({ base2: true, decimals: 0, value: __value }) + `</td>`;
                     //}
                     break;
                 case 7: //7=compression
@@ -5029,7 +5051,7 @@ async function FnFileSystemsGetCommand(pool = { name, id, altroot: false, boot: 
                         __value = __value.toUpperCase();
                     }
 
-                    filesystem.output += `<td><span class="table-ct-head">Compression:</span>` + __value + `</td>`;
+                    filesystem.output += `<td class="filesystem-ct-column-compression hidden"><span class="table-ct-head">Compression:</span>` + __value + `</td>`;
 
                     break;
                 case 8: //8=dedup
@@ -5045,7 +5067,7 @@ async function FnFileSystemsGetCommand(pool = { name, id, altroot: false, boot: 
                         __value = __value.replace(/edonr/gi, "Edon-R");
                     }
 
-                    filesystem.output += `<td><span class="table-ct-head">Deduplication:</span>` + __value.replace(/,verify/g, " + Verify") + `</td>`;
+                    filesystem.output += `<td class="filesystem-ct-column-deduplication hidden"><span class="table-ct-head">Deduplication:</span>` + __value.replace(/,verify/g, " + Verify") + `</td>`;
 
                     break;
                 case 9: //9=sharenfs
@@ -5075,7 +5097,7 @@ async function FnFileSystemsGetCommand(pool = { name, id, altroot: false, boot: 
                         __value = __value.toUpperCase();
                     }
 
-                    filesystem.output += `<td><span class="table-ct-head">Share:</span>` + (filesystem.shares.length > 0 ? filesystem.shares.join(" + ") : "Off") + `</td>`;
+                    filesystem.output += `<td class="filesystem-ct-column-share hidden"><span class="table-ct-head">Share:</span>` + (filesystem.shares.length > 0 ? filesystem.shares.join(" + ") : "Off") + `</td>`;
 
                     break;
                 case 11: //11=mountpoint
@@ -5092,7 +5114,7 @@ async function FnFileSystemsGetCommand(pool = { name, id, altroot: false, boot: 
                         __value = __value.charAt(0).toUpperCase() + __value.slice(1);
                     }
 
-                    filesystem.output += `<td><span class="table-ct-head">Mounted:</span>` + __value + `</td>`;
+                    filesystem.output += `<td class="filesystem-ct-column-mounted hidden"><span class="table-ct-head">Mounted:</span>` + __value + `</td>`;
 
                     break;
                 case 13: //13=replication task
@@ -5285,6 +5307,7 @@ async function FnFileSystemsGetCommand(pool = { name, id, altroot: false, boot: 
         filesystem.output += `</tr>`;
 
         $("#tbody-storagepool-filesystems-" + pool.id).append(filesystem.output);
+        $("#progressbar-filesystem-used-" + filesystem.id).css("width", filesystem.usedpercent + "%");
 
         //Register file system modals
         FnModalFileSystemConfigure({ name: pool.name, id: pool.id, altroot: pool.altroot, feature: { allocation_classes: pool.feature.allocation_classes, edonr: pool.feature.edonr, large_blocks: pool.feature.large_blocks, large_dnode: pool.feature.large_dnode, lz4_compress: pool.feature.lz4_compress, sha512: pool.feature.sha512, skein: pool.feature.skein }, readonly: pool.readonly }, { name: filesystem.name, id: filesystem.id, origin: filesystem.origin, type: filesystem.type });
@@ -5331,6 +5354,11 @@ async function FnFileSystemsGetCommand(pool = { name, id, altroot: false, boot: 
             FnModalFileSystemUnmount({ name: pool.name, id: pool.id, altroot: pool.altroot, readonly: pool.readonly }, { name: filesystem.name, id: filesystem.id, encryptionroot: filesystem.encryptionroot, keystatus: filesystem.keystatus, sharesmb: filesystem.sharesmb, type: filesystem.type });
         }
     }
+
+    $("#panel-storagepool-filesystems-" + pool.id + " .filesystem-ct-column-toggle:checked").each(function () {
+        let column = $(this).attr("data-column");
+        $("#table-storagepool-filesystems-" + pool.id + " .filesystem-ct-column-" + column).removeClass("hidden");
+    });
 
     //Register file systems modals
     if (!pool.readonly) {
