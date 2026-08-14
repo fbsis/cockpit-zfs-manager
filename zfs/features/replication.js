@@ -200,7 +200,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     </ol>
                     <section class="replication-ct-step" data-step="1">
                         <h5>Source dataset</h5>
-                        <p class="help-block">Choose whether child datasets are included and how much memory can be used while streaming snapshots.</p>
+                        <p class="help-block">Choose whether child datasets are included and select a transfer profile suitable for this server.</p>
                         <div class="ct-form">
                             <label class="control-label">Dataset</label>
                             <div><strong>${filesystem.name}</strong></div>
@@ -220,13 +220,13 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                             </select>
                             <span id="replication-task-mbuffer-preset-help-${filesystem.id}" class="help-block"></span>
                         </div>
-                        <label class="control-label">mBuffer Size</label>
-                        <div id="validationwrapper-storagepool-replication-task-` + filesystem.id + `" class="ct-validation-wrapper">
+                        <label class="control-label replication-ct-mbuffer-custom-${filesystem.id}${repTask ? '' : ' hidden'}">Custom buffer size</label>
+                        <div id="validationwrapper-storagepool-replication-task-` + filesystem.id + `" class="ct-validation-wrapper replication-ct-mbuffer-custom-${filesystem.id}${repTask ? '' : ' hidden'}">
                             <input id="input-storagepool-replication-task-mbuffersize-` + filesystem.id + `" class="form-control privileged-modal" data-field="name" data-field-type="text-input" tabindex="2" type="number" value="${repTask && mBufferSize.length === 2 ? mBufferSize[0] : '1'}">
                             <span id="helpblock-storagepool-replication-task-` + filesystem.id + `" class="help-block"></span>
                         </div>
-                        <label class="control-label">mBuffer Unit</label>
-                        <div class="ct-validation-wrapper">
+                        <label class="control-label replication-ct-mbuffer-custom-${filesystem.id}${repTask ? '' : ' hidden'}">Buffer unit</label>
+                        <div class="ct-validation-wrapper replication-ct-mbuffer-custom-${filesystem.id}${repTask ? '' : ' hidden'}">
                             <div class="btn-group bootstrap-select dropdown form-control privileged-modal">
                                 <button aria-expanded="false" class="btn btn-default dropdown-toggle" data-toggle="dropdown" tabIndex="1" type="button">
                                     <span id="btnspan-storagepool-replication-task-mbuffersize-unit-` + filesystem.id + `" class="pull-left" data-field-value="${repTask && mBufferSize.length === 2 ? mBufferSize[1] : 'G'}">${repTask && mBufferSize.length === 2 ? mBufferSize[1] : 'G'}</span>
@@ -261,9 +261,8 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         <div class="replication-ct-rules-heading">
                             <div>
                                 <h5 class="modal-title">Snapshot schedule rules</h5>
-                                <p class="help-block">Each rule says how often a snapshot is created and how long that snapshot is kept.</p>
+                                <p class="help-block">The selected policy creates the required schedule rules automatically. Adjust the displayed values when you need a custom policy.</p>
                             </div>
-                            <a class="btn btn-default btn-sm" href="#" id="storagepool-replication-task-add-src-` + filesystem.id + `">Add custom rule</a>
                         </div>
                         <div id="src-storagepool-replication-task-` + filesystem.id + `"></div>
                         <script nonce="1t55lZ7tzuKTreHVNwE66Ox32Mc=">${srcScript}</script>
@@ -299,7 +298,6 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                                 <h5 class="modal-title">Destination retention rules</h5>
                                 <p class="help-block">Choose how long replicated snapshots remain available at the destination.</p>
                             </div>
-                            <a class="btn btn-default btn-sm" href="#" id="storagepool-replication-task-add-dst-` + filesystem.id + `">Add custom rule</a>
                         </div>
                         <div class="ct-form replication-ct-preset">
                             <label class="control-label" for="select-replication-task-dst-preset-${filesystem.id}">Destination retention preset</label>
@@ -601,8 +599,9 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
 
                 $("#select-replication-task-mbuffer-preset-${filesystem.id}").on("change", function () {
                     let preset = replicationMbufferPresets[this.value];
+                    $(".replication-ct-mbuffer-custom-${filesystem.id}").toggleClass("hidden", !!preset);
                     if (!preset) {
-                        $("#replication-task-mbuffer-preset-help-${filesystem.id}").text("Custom buffer size.");
+                        $("#replication-task-mbuffer-preset-help-${filesystem.id}").text("Set the buffer size manually using the advanced fields below.");
                         return;
                     }
                     $("#input-storagepool-replication-task-mbuffersize-${filesystem.id}").val(preset.size);
@@ -723,18 +722,6 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     } else {
                         $("#dst-storagepool-replication-task-` + filesystem.id + `").empty();
                     }
-                });
-
-                $("#storagepool-replication-task-add-src-` + filesystem.id + `").on("click", event => {
-                    event.preventDefault();
-                    $("#select-replication-task-src-preset-${filesystem.id}").val("custom").trigger("change");
-                    AddSrcPlan("#src-storagepool-replication-task-` + filesystem.id + `");
-                });
-
-                $("#storagepool-replication-task-add-dst-` + filesystem.id + `").on("click", event => {
-                    event.preventDefault();
-                    $("#select-replication-task-dst-preset-${filesystem.id}").val("custom").trigger("change");
-                    AddDstPlan("#dst-storagepool-replication-task-` + filesystem.id + `");
                 });
 
                 function changeUnit(x) {
