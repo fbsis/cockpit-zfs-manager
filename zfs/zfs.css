@@ -1697,7 +1697,7 @@ td.listing-ct-toggle i {
 
     td.listing-ct-toggle i:before {
         position: relative;
-        content: "\F105";
+        content: "\e080";
         display: block;
     }
 
@@ -1705,7 +1705,7 @@ td.listing-ct-toggle i {
 tbody.open > tr.listing-ct-item td.listing-ct-toggle i:before,
 /* Modified for Cockpit ZFS Manager - New */
 tbody.open > tr.listing-ct-item-snapshots .listing-ct-toggle-snapshots i:before {
-    content: "\F107";
+    content: "\e114";
     animation: listingCtToggleOpen 100ms ease-in-out;
     top: 1px;
 }
@@ -7229,3 +7229,33 @@ h6.modal-title {
     --pf-global--FontFamily--sans-serif: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     --pf-global--FontFamily--heading--sans-serif: var(--pf-global--FontFamily--sans-serif);
 }
+
+/*
+ * The current Cockpit no longer ships the legacy PatternFly and Font Awesome
+ * webfonts. Reuse Bootstrap 3's bundled Glyphicons for every icon displayed by
+ * this page so the plugin is independent from Cockpit's internal assets.
+ */
+.pficon,
+.fa {
+    font-family: "Glyphicons Halflings" !important;
+}
+
+.pficon-close::before,
+.fa-times::before { content: "\e014"; }
+.pficon-enhancement::before { content: "\e006"; }
+.pficon-error-circle-o::before { content: "\e088"; }
+.pficon-image::before { content: "\e060"; }
+.pficon-info::before,
+.fa-info-circle::before { content: "\e086"; }
+.pficon-locked::before,
+.pficon-private::before { content: "\e033"; }
+.pficon-migration::before { content: "\e178"; }
+.pficon-ok::before,
+.fa-check-circle::before { content: "\e084"; }
+.pficon-unlocked::before { content: "\e105"; }
+.pficon-warning-triangle-o::before,
+.fa-exclamation-triangle::before { content: "\e107"; }
+.fa-bell::before { content: "\e123"; }
+.fa-ellipsis-v::before { content: "\e235"; }
+.fa-exclamation-circle::before { content: "\e101"; }
+.fa-external-link::before { content: "\e164"; }
