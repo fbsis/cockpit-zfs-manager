@@ -214,9 +214,9 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     </section>
                     <section class="replication-ct-step hidden" data-step="2">
                         <h5>Snapshot schedule and retention</h5>
-                        <p class="help-block">Each plan defines how long snapshots are retained and how often they are created. Multiple plans can be combined.</p>
+                        <p class="help-block">Choose a ready-made policy, then review the exact schedule below. You can combine multiple rules when you need different short- and long-term history.</p>
                         <div class="ct-form replication-ct-preset">
-                            <label class="control-label" for="select-replication-task-src-preset-${filesystem.id}">Friendly preset</label>
+                            <label class="control-label" for="select-replication-task-src-preset-${filesystem.id}">Retention policy preset</label>
                             <select id="select-replication-task-src-preset-${filesystem.id}" class="form-control">
                                 <option value="hourly"${repTask ? '' : ' selected'}>Hourly — keep 7 days</option>
                                 <option value="daily">Daily — keep 30 days</option>
@@ -228,7 +228,13 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                             <p id="replication-task-src-preset-help-${filesystem.id}" class="help-block"></p>
                         </div>
                     <div class="mt-2">
-                        <h5 class="modal-title">Source Plans <a href="#" id="storagepool-replication-task-add-src-` + filesystem.id + `">&plus;</a></h5>
+                        <div class="replication-ct-rules-heading">
+                            <div>
+                                <h5 class="modal-title">Snapshot schedule rules</h5>
+                                <p class="help-block">Each rule says how often a snapshot is created and how long that snapshot is kept.</p>
+                            </div>
+                            <a class="btn btn-default btn-sm" href="#" id="storagepool-replication-task-add-src-` + filesystem.id + `">Add custom rule</a>
+                        </div>
                         <div id="src-storagepool-replication-task-` + filesystem.id + `"></div>
                         <script nonce="1t55lZ7tzuKTreHVNwE66Ox32Mc=">${srcScript}</script>
                     </div>
@@ -242,8 +248,29 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                                 <input id="input-storagepool-replication-task-use-destination-` + filesystem.id + `" class="privileged-modal" type="checkbox" ${repTask && useDst ? ' checked' : ''}>
                             </div>
                         </div>
+                        <div class="replication-ct-route" aria-live="polite">
+                            <div>
+                                <span>Source pool</span>
+                                <strong>${pool.name}</strong>
+                            </div>
+                            <div>
+                                <span>Source dataset</span>
+                                <strong>${filesystem.name}</strong>
+                            </div>
+                            <div class="replication-ct-route-arrow" aria-hidden="true">→</div>
+                            <div>
+                                <span>Destination pool / dataset</span>
+                                <strong id="replication-task-destination-preview-${filesystem.id}">Replication disabled</strong>
+                            </div>
+                        </div>
                     <div class="mt-2" id="storagepool-replication-task-dst-plans-` + filesystem.id + `">
-                        <h5 class="modal-title">Destination Plans <a href="#" id="storagepool-replication-task-add-dst-` + filesystem.id + `">&plus;</a></h5>
+                        <div class="replication-ct-rules-heading">
+                            <div>
+                                <h5 class="modal-title">Destination retention rules</h5>
+                                <p class="help-block">Choose how long replicated snapshots remain available at the destination.</p>
+                            </div>
+                            <a class="btn btn-default btn-sm" href="#" id="storagepool-replication-task-add-dst-` + filesystem.id + `">Add custom rule</a>
+                        </div>
                         <div class="ct-form replication-ct-preset">
                             <label class="control-label" for="select-replication-task-dst-preset-${filesystem.id}">Destination retention preset</label>
                             <select id="select-replication-task-dst-preset-${filesystem.id}" class="form-control">
@@ -274,10 +301,10 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                             <input id="input-storagepool-replication-task-host-` + filesystem.id + `" class="form-control privileged-modal" data-field="name" data-field-type="text-input" tabindex="2" type="text" value="${repTask && destination.host ? destination.host : ''}">
                             <span id="helpblock-storagepool-replication-task-` + filesystem.id + `" class="help-block"></span>
                         </div>
-                        <label class="control-label">Destination Dataset</label>
+                        <label class="control-label">Destination pool / dataset</label>
                         <div id="validationwrapper-storagepool-replication-task-` + filesystem.id + `" class="ct-validation-wrapper">
-                            <input id="input-storagepool-replication-task-dst-dataset-` + filesystem.id + `" class="form-control privileged-modal" data-field="name" data-field-type="text-input" tabindex="2" type="text" value="${repTask && destination.dataset ? destination.dataset : ''}">
-                            <span id="helpblock-storagepool-replication-task-` + filesystem.id + `" class="help-block"></span>
+                            <input id="input-storagepool-replication-task-dst-dataset-` + filesystem.id + `" class="form-control privileged-modal" data-field="name" data-field-type="text-input" placeholder="backup-pool/dataset" tabindex="2" type="text" value="${repTask && destination.dataset ? destination.dataset : ''}">
+                            <span id="helpblock-storagepool-replication-task-` + filesystem.id + `" class="help-block">Enter the complete ZFS path. The first segment is the destination pool.</span>
                         </div>
                     </div>
                     </section>
@@ -361,6 +388,25 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     ].filter(Boolean).join("\n"));
                 }
 
+                function replicationDestinationPreview() {
+                    let enabled = $("#input-storagepool-replication-task-use-destination-${filesystem.id}").prop("checked");
+                    let dataset = $("#input-storagepool-replication-task-dst-dataset-${filesystem.id}").val().trim();
+                    let external = $("#input-storagepool-replication-task-external-${filesystem.id}").prop("checked");
+                    let preview = "Replication disabled";
+
+                    if (enabled && !dataset) {
+                        preview = "Select a destination pool / dataset";
+                    } else if (enabled && external) {
+                        let user = $("#input-storagepool-replication-task-user-${filesystem.id}").val().trim() || "user";
+                        let host = $("#input-storagepool-replication-task-host-${filesystem.id}").val().trim() || "host";
+                        preview = user + "@" + host + ":" + dataset + " (pool: " + dataset.split("/")[0] + ")";
+                    } else if (enabled) {
+                        preview = dataset + " (local pool: " + dataset.split("/")[0] + ")";
+                    }
+
+                    $("#replication-task-destination-preview-${filesystem.id}").text(preview);
+                }
+
                 function replicationValidationErrors() {
                     let errors = [];
                     let mBufferSize = Number($("#input-storagepool-replication-task-mbuffersize-${filesystem.id}").val());
@@ -390,6 +436,8 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     replicationRefreshLogs();
                 });
                 $("#btn-replication-task-logs-${filesystem.id}").on("click", replicationRefreshLogs);
+                $("#input-storagepool-replication-task-use-destination-${filesystem.id}, #input-storagepool-replication-task-external-${filesystem.id}, #input-storagepool-replication-task-user-${filesystem.id}, #input-storagepool-replication-task-host-${filesystem.id}, #input-storagepool-replication-task-dst-dataset-${filesystem.id}").on("input change", replicationDestinationPreview);
+                replicationDestinationPreview();
 
                 const replicationSourcePresets = {
                     hourly: {
@@ -743,13 +791,34 @@ function AddSrcPlan(element, data = { ret: '7', retUnit: 'Day', int: '1', intUni
 
     $(element).append(`
     <div class="ct-form plan-wrapper" data-type="src" data-id="${id}">
-        <label class="control-label">Retention Time</label>
+        <div class="replication-ct-plan-heading">
+            <strong>Schedule rule</strong>
+            <button class="btn btn-link replication-ct-plan-remove" type="button">Remove</button>
+        </div>
+        <label class="control-label">Create snapshots every</label>
+        <div id="validationwrapper-storagepool-replication-task-src-int-${id}" class="ct-validation-wrapper">
+            <input id="input-storagepool-replication-task-src-int-${id}" class="form-control privileged-modal" data-field="name" data-field-type="text-input" tabindex="2" type="number" value="${data.int}">
+            <span id="helpblock-storagepool-replication-task-src-int-${id}" class="help-block"></span>
+        </div>
+        <label class="control-label replication-ct-unit-label">Interval unit</label>
+        <div class="ct-validation-wrapper replication-ct-plan-unit">
+            <div class="btn-group bootstrap-select dropdown form-control privileged-modal">
+                <button aria-expanded="false" class="btn btn-default dropdown-toggle" data-toggle="dropdown" tabIndex="1" type="button">
+                    <span id="btnspan-storagepool-replication-task-src-int-unit-${id}" class="pull-left" data-field-value="${data.intUnit.toLowerCase()}">${data.intUnit}</span>
+                    <div class="caret"></div>
+                </button>
+                <ul id="dropdown-storagepool-replication-task-src-int-unit-${id}" class="dropdown-menu">
+                    <li value="second"><a tabindex="-1">Second</a></li><li value="minute"><a tabindex="-1">Minute</a></li><li value="hour"><a tabindex="-1">Hour</a></li><li value="day"><a tabindex="-1">Day</a></li><li value="week"><a tabindex="-1">Week</a></li><li value="month"><a tabindex="-1">Month</a></li><li value="year"><a tabindex="-1">Year</a></li>
+                </ul>
+            </div>
+        </div>
+        <label class="control-label">Keep each snapshot for</label>
         <div id="validationwrapper-storagepool-replication-task-src-ret-${id}" class="ct-validation-wrapper">
             <input id="input-storagepool-replication-task-src-ret-${id}" class="form-control privileged-modal" data-field="name" data-field-type="text-input" tabindex="2" type="number" value="${data.ret}">
             <span id="helpblock-storagepool-replication-task-src-ret-${id}" class="help-block"></span>
         </div>
-        <label class="control-label">Retention Time Unit</label>
-        <div class="ct-validation-wrapper">
+        <label class="control-label replication-ct-unit-label">Retention unit</label>
+        <div class="ct-validation-wrapper replication-ct-plan-unit">
             <div class="btn-group bootstrap-select dropdown form-control privileged-modal">
                 <button aria-expanded="false" class="btn btn-default dropdown-toggle" data-toggle="dropdown" tabIndex="1" type="button">
                     <span id="btnspan-storagepool-replication-task-src-ret-unit-${id}" class="pull-left" data-field-value="${data.retUnit.toLowerCase()}">${data.retUnit}</span>
@@ -767,31 +836,6 @@ function AddSrcPlan(element, data = { ret: '7', retUnit: 'Day', int: '1', intUni
             </div>
         </div>
 
-        <label class="control-label">Interval Time</label>
-        <div id="validationwrapper-storagepool-replication-task-src-int-${id}" class="ct-validation-wrapper">
-            <input id="input-storagepool-replication-task-src-int-${id}" class="form-control privileged-modal" data-field="name" data-field-type="text-input" tabindex="2" type="number" value="${data.int}">
-            <span id="helpblock-storagepool-replication-task-src-int-${id}" class="help-block"></span>
-        </div>
-        <label class="control-label">Interval Time Unit</label>
-        <div class="ct-validation-wrapper">
-            <div class="btn-group bootstrap-select dropdown form-control privileged-modal">
-                <button aria-expanded="false" class="btn btn-default dropdown-toggle" data-toggle="dropdown" tabIndex="1" type="button">
-                    <span id="btnspan-storagepool-replication-task-src-int-unit-${id}" class="pull-left" data-field-value="${data.intUnit.toLowerCase()}">${data.intUnit}</span>
-                    <div class="caret"></div>
-                </button>
-                <ul id="dropdown-storagepool-replication-task-src-int-unit-${id}" class="dropdown-menu">
-                    <li value="second"><a tabindex="-1">Second</a></li>
-                    <li value="minute"><a tabindex="-1">Minute</a></li>
-                    <li value="hour"><a tabindex="-1">Hour</a></li>
-                    <li value="day"><a tabindex="-1">Day</a></li>
-                    <li value="week"><a tabindex="-1">Week</a></li>
-                    <li value="month"><a tabindex="-1">Month</a></li>
-                    <li value="year"><a tabindex="-1">Year</a></li>
-                </ul>
-            </div>
-        </div>
-        <div></div>
-        <div><button class="btn btn-link replication-ct-plan-remove" type="button">Remove plan</button></div>
         <script nonce="1t55lZ7tzuKTreHVNwE66Ox32Mc=">
             $("[data-type='src'][data-id='${id}'] .replication-ct-plan-remove").on("click", function () {
                 $(this).closest(".modal").find("select[id^='select-replication-task-src-preset']").val("custom").trigger("change");
@@ -818,13 +862,17 @@ function AddDstPlan(element, data = { ret: '30', retUnit: 'Day', int: '1', intUn
 
     $(element).append(`
     <div class="ct-form plan-wrapper" data-type="dst" data-id="${id}">
-        <label class="control-label">Retention Time</label>
+        <div class="replication-ct-plan-heading">
+            <strong>Destination retention rule</strong>
+            <button class="btn btn-link replication-ct-plan-remove" type="button">Remove</button>
+        </div>
+        <label class="control-label">Keep each snapshot for</label>
         <div id="validationwrapper-storagepool-replication-task-dst-ret-${id}" class="ct-validation-wrapper">
             <input id="input-storagepool-replication-task-dst-ret-${id}" class="form-control privileged-modal" data-field="name" data-field-type="text-input" tabindex="2" type="number" value="${data.ret}">
             <span id="helpblock-storagepool-replication-task-dst-ret-${id}" class="help-block"></span>
         </div>
-        <label class="control-label">Retention Time Unit</label>
-        <div class="ct-validation-wrapper">
+        <label class="control-label replication-ct-unit-label">Retention unit</label>
+        <div class="ct-validation-wrapper replication-ct-plan-unit">
             <div class="btn-group bootstrap-select dropdown form-control privileged-modal">
                 <button aria-expanded="false" class="btn btn-default dropdown-toggle" data-toggle="dropdown" tabIndex="1" type="button">
                     <span id="btnspan-storagepool-replication-task-dst-ret-unit-${id}" class="pull-left" data-field-value="${data.retUnit.toLowerCase()}">${data.retUnit}</span>
@@ -842,13 +890,13 @@ function AddDstPlan(element, data = { ret: '30', retUnit: 'Day', int: '1', intUn
             </div>
         </div>
 
-        <label class="control-label">Interval Time</label>
+        <label class="control-label">Keep one snapshot every</label>
         <div id="validationwrapper-storagepool-replication-task-dst-int-${id}" class="ct-validation-wrapper">
             <input id="input-storagepool-replication-task-dst-int-${id}" class="form-control privileged-modal" data-field="name" data-field-type="text-input" tabindex="2" type="number" value="${data.int}">
             <span id="helpblock-storagepool-replication-task-dst-int-${id}" class="help-block"></span>
         </div>
-        <label class="control-label">Interval Time Unit</label>
-        <div class="ct-validation-wrapper">
+        <label class="control-label replication-ct-unit-label">Interval unit</label>
+        <div class="ct-validation-wrapper replication-ct-plan-unit">
             <div class="btn-group bootstrap-select dropdown form-control privileged-modal">
                 <button aria-expanded="false" class="btn btn-default dropdown-toggle" data-toggle="dropdown" tabIndex="1" type="button">
                     <span id="btnspan-storagepool-replication-task-dst-int-unit-${id}" class="pull-left" data-field-value="${data.intUnit.toLowerCase()}">${data.intUnit}</span>
@@ -866,8 +914,6 @@ function AddDstPlan(element, data = { ret: '30', retUnit: 'Day', int: '1', intUn
             </div>
         </div>
 
-        <div></div>
-        <div><button class="btn btn-link replication-ct-plan-remove" type="button">Remove plan</button></div>
         <script nonce="1t55lZ7tzuKTreHVNwE66Ox32Mc=">
             $("[data-type='dst'][data-id='${id}'] .replication-ct-plan-remove").on("click", function () {
                 $(this).closest(".modal").find("select[id^='select-replication-task-dst-preset']").val("custom").trigger("change");
