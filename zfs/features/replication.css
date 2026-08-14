@@ -147,6 +147,38 @@
     font-size: 1.5rem;
 }
 
+.replication-ct-ssh-info {
+    grid-column: 1 / -1;
+    gap: 0.35rem;
+    padding: 1rem;
+    background: var(--pf-global--BackgroundColor--150);
+    border: 1px solid var(--pf-global--BorderColor--100);
+    border-left: 3px solid var(--pf-global--info-color--100, var(--pf-global--primary-color--100));
+}
+
+.replication-ct-ssh-info p,
+.replication-ct-ssh-info ol {
+    margin: 0;
+}
+
+.replication-ct-ssh-info ol {
+    padding-left: 1.25rem;
+}
+
+.replication-ct-ssh-info > code {
+    display: block;
+    padding: 0.5rem;
+    overflow-wrap: anywhere;
+    color: var(--pf-global--Color--100);
+    background: var(--pf-global--BackgroundColor--200);
+    border: 1px solid var(--pf-global--BorderColor--100);
+}
+
+.replication-ct-ssh-info small,
+.replication-ct-ssh-info > span {
+    color: var(--pf-global--Color--200);
+}
+
 .replication-ct-log-heading {
     display: flex;
     margin-top: 1rem;

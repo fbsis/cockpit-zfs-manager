@@ -291,15 +291,27 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         <div id="validationwrapper-storagepool-replication-task-` + filesystem.id + `">
                             <input id="input-storagepool-replication-task-external-` + filesystem.id + `" class="privileged-modal" data-field="name" data-field-type="text-input" tabindex="2" type="checkbox"${repTask && destination.external ? ' checked' : ''}>
                         </div>
-                        <label class="control-label external-storagepool-replication-task-item-` + filesystem.id + `">User</label>
-                        <div id="validationwrapper-storagepool-replication-task-` + filesystem.id + `" class="ct-validation-wrapper external-storagepool-replication-task-item-` + filesystem.id + `">
-                            <input id="input-storagepool-replication-task-user-` + filesystem.id + `" class="form-control privileged-modal" data-field="name" data-field-type="text-input" tabindex="2" type="text" value="${repTask && destination.user ? destination.user : ''}">
-                            <span id="helpblock-storagepool-replication-task-` + filesystem.id + `" class="help-block"></span>
+                        <div class="replication-ct-ssh-info external-storagepool-replication-task-item-` + filesystem.id + `">
+                            <strong>SSH key authentication</strong>
+                            <p>No password is stored or requested. Automatic replication requires passwordless SSH access from this server to the remote server.</p>
+                            <ol>
+                                <li>Install the local replication user's public SSH key in the remote user's <code>authorized_keys</code>.</li>
+                                <li>Accept the remote server's host key before enabling the task.</li>
+                                <li>Ensure the remote user can run <code>zfs receive</code> for the destination dataset.</li>
+                            </ol>
+                            <span>Connection test (run on this server):</span>
+                            <code id="replication-task-ssh-test-${filesystem.id}">sudo ssh -o BatchMode=yes user@host true</code>
+                            <small>SSH port 22 and the service account's default private key are used. znapzend normally runs as root.</small>
                         </div>
-                        <label class="control-label external-storagepool-replication-task-item-` + filesystem.id + `">Host</label>
+                        <label class="control-label external-storagepool-replication-task-item-` + filesystem.id + `">SSH user</label>
                         <div id="validationwrapper-storagepool-replication-task-` + filesystem.id + `" class="ct-validation-wrapper external-storagepool-replication-task-item-` + filesystem.id + `">
-                            <input id="input-storagepool-replication-task-host-` + filesystem.id + `" class="form-control privileged-modal" data-field="name" data-field-type="text-input" tabindex="2" type="text" value="${repTask && destination.host ? destination.host : ''}">
-                            <span id="helpblock-storagepool-replication-task-` + filesystem.id + `" class="help-block"></span>
+                            <input id="input-storagepool-replication-task-user-` + filesystem.id + `" class="form-control privileged-modal" data-field="name" data-field-type="text-input" placeholder="root" tabindex="2" type="text" value="${repTask && destination.user ? destination.user : ''}">
+                            <span class="help-block">Account used to open the SSH connection and receive the ZFS stream.</span>
+                        </div>
+                        <label class="control-label external-storagepool-replication-task-item-` + filesystem.id + `">Remote host</label>
+                        <div id="validationwrapper-storagepool-replication-task-` + filesystem.id + `" class="ct-validation-wrapper external-storagepool-replication-task-item-` + filesystem.id + `">
+                            <input id="input-storagepool-replication-task-host-` + filesystem.id + `" class="form-control privileged-modal" data-field="name" data-field-type="text-input" placeholder="192.168.1.120" tabindex="2" type="text" value="${repTask && destination.host ? destination.host : ''}">
+                            <span class="help-block">IP address or DNS name of the server containing the destination pool.</span>
                         </div>
                         <label class="control-label">Destination pool / dataset</label>
                         <div id="validationwrapper-storagepool-replication-task-` + filesystem.id + `" class="ct-validation-wrapper">
@@ -405,6 +417,9 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     }
 
                     $("#replication-task-destination-preview-${filesystem.id}").text(preview);
+                    let sshUser = $("#input-storagepool-replication-task-user-${filesystem.id}").val().trim() || "user";
+                    let sshHost = $("#input-storagepool-replication-task-host-${filesystem.id}").val().trim() || "host";
+                    $("#replication-task-ssh-test-${filesystem.id}").text("sudo ssh -o BatchMode=yes " + sshUser + "@" + sshHost + " true");
                 }
 
                 function replicationValidationErrors() {
