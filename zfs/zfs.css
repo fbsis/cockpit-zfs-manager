@@ -117,6 +117,11 @@ fieldset[disabled] .btn {
     word-break: break-all;
 }
 
+.filesystem-ct-indent {
+    display: inline-block;
+    width: 1.25rem;
+}
+
 .listing-ct .listing-ct-icon {
     width: 35px !important;
 }

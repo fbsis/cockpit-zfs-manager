@@ -4979,8 +4979,9 @@ async function FnFileSystemsGetCommand(pool = { name, id, altroot: false, boot: 
                 case 1: //1=name
                     filesystem.name = __value;
                     filesystem.id = FnGenerateId({ at: true, colon: true, forwardslash: true, period: true, underscore: true, whitespace: true }, { name: filesystem.name, attribute: true });
+                    let filesystemIndent = `<span class="filesystem-ct-indent" aria-hidden="true"></span>`.repeat(Math.max(0, filesystem.name.split("/").length - 1));
 
-                    filesystem.output += `<td colspan="2"><span class="table-ct-head">Name:</span>` + __value + (filesystem.readonly ? ` <span class="pficon pficon-private pficon-ct-` + (pool.boot && zfsmanager.configuration.zfs.storagepool.bootlockdown ? `boot` : ``) + `readonly" data-placement="auto top" data-toggle="tooltip" title="` + (pool.boot && zfsmanager.configuration.zfs.storagepool.bootlockdown ? `The user <strong>` + zfsmanager.user.name + `</strong> is not permitted to manage this file system` : `File System is Read Only`) + `"></span>` : ``) + `</td>`;
+                    filesystem.output += `<td class="filesystem-ct-name" colspan="2"><span class="table-ct-head">Name:</span>` + filesystemIndent + __value + (filesystem.readonly ? ` <span class="pficon pficon-private pficon-ct-` + (pool.boot && zfsmanager.configuration.zfs.storagepool.bootlockdown ? `boot` : ``) + `readonly" data-placement="auto top" data-toggle="tooltip" title="` + (pool.boot && zfsmanager.configuration.zfs.storagepool.bootlockdown ? `The user <strong>` + zfsmanager.user.name + `</strong> is not permitted to manage this file system` : `File System is Read Only`) + `"></span>` : ``) + `</td>`;
 
                     break;
                 case 2: //2=avail
