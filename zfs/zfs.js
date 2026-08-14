@@ -21185,6 +21185,16 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         <div id="validationwrapper-storagepool-replication-task-` + filesystem.id + `">
                             <input id="input-storagepool-replication-task-recursive-` + filesystem.id + `" class="privileged-modal" data-field="name" data-field-type="text-input" tabindex="2" type="checkbox"${repTask && recursive ? ' checked' : ''}>
                         </div>
+                        <label class="control-label" for="select-replication-task-mbuffer-preset-${filesystem.id}">Transfer profile</label>
+                        <div>
+                            <select id="select-replication-task-mbuffer-preset-${filesystem.id}" class="form-control">
+                                <option value="low">Low memory — 256 MB</option>
+                                <option value="normal">Normal — 512 MB</option>
+                                <option value="fast"${repTask ? '' : ' selected'}>Fast/local — 1 GB (recommended)</option>
+                                <option value="custom"${repTask ? ' selected' : ''}>Custom</option>
+                            </select>
+                            <span id="replication-task-mbuffer-preset-help-${filesystem.id}" class="help-block"></span>
+                        </div>
                         <label class="control-label">mBuffer Size</label>
                         <div id="validationwrapper-storagepool-replication-task-` + filesystem.id + `" class="ct-validation-wrapper">
                             <input id="input-storagepool-replication-task-mbuffersize-` + filesystem.id + `" class="form-control privileged-modal" data-field="name" data-field-type="text-input" tabindex="2" type="number" value="${repTask && mBufferSize.length === 2 ? mBufferSize[0] : '1'}">
@@ -21305,6 +21315,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
             </div>
 
             <script nonce="1t55lZ7tzuKTreHVNwE66Ox32Mc=">
+                (function () {
                 ${repTask && destination.external ? '' : `$(".external-storagepool-replication-task-item-${filesystem.id}").css('display', 'none');`}
                 ${repTask && useDst ? '' : `$("#storagepool-replication-task-dst-plans-${filesystem.id}").css('display', 'none');`}
                 ${repTask && useDst ? '' : `$("#storagepool-replication-task-dst-inputs-${filesystem.id}").css('display', 'none');`}
@@ -21502,8 +21513,32 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     $("#replication-task-dst-preset-help-${filesystem.id}").text("Custom plan — values were adjusted manually.");
                 });
 
+                const replicationMbufferPresets = {
+                    low: { size: "256", unit: "M", description: "Uses less RAM; suitable for small servers or slower links." },
+                    normal: { size: "512", unit: "M", description: "Balanced memory usage for typical network replication." },
+                    fast: { size: "1", unit: "G", description: "Recommended for fast networks and local replication." }
+                };
+
+                $("#select-replication-task-mbuffer-preset-${filesystem.id}").on("change", function () {
+                    let preset = replicationMbufferPresets[this.value];
+                    if (!preset) {
+                        $("#replication-task-mbuffer-preset-help-${filesystem.id}").text("Custom buffer size.");
+                        return;
+                    }
+                    $("#input-storagepool-replication-task-mbuffersize-${filesystem.id}").val(preset.size);
+                    $("#btnspan-storagepool-replication-task-mbuffersize-unit-${filesystem.id}").text(preset.unit).attr("data-field-value", preset.unit);
+                    $("#replication-task-mbuffer-preset-help-${filesystem.id}").text(preset.description);
+                }).trigger("change");
+
+                $("#input-storagepool-replication-task-mbuffersize-${filesystem.id}").on("input", () => {
+                    $("#select-replication-task-mbuffer-preset-${filesystem.id}").val("custom");
+                    $("#replication-task-mbuffer-preset-help-${filesystem.id}").text("Custom buffer size.");
+                });
+
                 $("#dropdown-storagepool-replication-task-mbuffersize-unit-` + filesystem.id + `").on("click", "li a", function () {
                     $("#btnspan-storagepool-replication-task-mbuffersize-unit-` + filesystem.id + `").text($(this).text()).attr("data-field-value", $(this).parent().attr("value"));
+                    $("#select-replication-task-mbuffer-preset-${filesystem.id}").val("custom");
+                    $("#replication-task-mbuffer-preset-help-${filesystem.id}").text("Custom buffer size.");
                     $(this).parent().siblings().removeClass("active");
                     $(this).parent().addClass("active");
                 });
@@ -21689,6 +21724,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         FnDisplayAlert({ status: "danger", title: "Replication task could not be deleted", description: "The detailed znapzend error is available in Review & Logs.", breakword: false }, { name: "replicationtask-delete" });
                     });
                 });
+                })();
             </script>
         </div>
     `;
