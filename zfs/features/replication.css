@@ -1,0 +1,88 @@
+.replication-ct-steps {
+    display: flex;
+    margin: 0 0 1.5rem;
+    padding: 0;
+    list-style: none;
+    border-bottom: 1px solid var(--pf-global--BorderColor--100);
+}
+
+.replication-ct-steps li {
+    flex: 1;
+    padding: 0.75rem 0.5rem;
+    color: var(--pf-global--Color--200);
+    cursor: pointer;
+    text-align: center;
+    border-bottom: 3px solid transparent;
+}
+
+.replication-ct-steps li span {
+    display: inline-flex;
+    width: 1.5rem;
+    height: 1.5rem;
+    margin-right: 0.4rem;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+}
+
+.replication-ct-steps li.active {
+    color: var(--pf-global--primary-color--100);
+    font-weight: 600;
+    border-bottom-color: var(--pf-global--primary-color--100);
+}
+
+.replication-ct-steps li.complete {
+    color: var(--pf-global--success-color--100);
+}
+
+.replication-ct-step {
+    min-height: 20rem;
+}
+
+.replication-ct-step > h5:first-child {
+    margin-top: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.replication-ct-preset {
+    margin: 1rem 0;
+    padding: 1rem;
+    background: var(--pf-global--BackgroundColor--150);
+    border-left: 3px solid var(--pf-global--primary-color--100);
+}
+
+.replication-ct-preset .help-block {
+    margin: 0;
+}
+
+.replication-ct-log-heading {
+    display: flex;
+    margin-top: 1rem;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.replication-ct-log {
+    max-height: 15rem;
+    padding: 0.75rem;
+    overflow: auto;
+    color: var(--pf-global--Color--100);
+    background: var(--pf-global--BackgroundColor--200);
+    border: 1px solid var(--pf-global--BorderColor--100);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+@media screen and (max-width: 640px) {
+    .replication-ct-steps li {
+        overflow: hidden;
+        font-size: 0;
+    }
+
+    .replication-ct-steps li span {
+        margin-right: 0;
+        font-size: 0.875rem;
+    }
+}
