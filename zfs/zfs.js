@@ -21123,6 +21123,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
     let recursive;
     let mBufferSize;
     let destination;
+    let loadError = "";
 
     if (filesystem.replicationtask) {
         try {
@@ -21153,25 +21154,36 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
             mBufferSize = znapzendSplitNumberCharacter(data?.mbuffer_size);
             destination = znapzendParseDestination(data?.dst_a);
         } catch (error) {
-            FnDisplayAlert({ status: "danger", title: "Replication task could not be configured", description: '${filesystem.name}', breakword: false }, { name: "replicationtask-configure" });   
+            repTask = false;
+            loadError = error.message || String(error);
+            FnDisplayAlert({ status: "danger", title: "Replication task could not be loaded", description: "Open Review & Logs for details.", breakword: false }, { name: "replicationtask-configure" });
         }
     }
 
     modal.content = `
-        <div class="modal-dialog">
+        <div class="modal-dialog modal-lg replication-ct-dialog">
             <div class="modal-content">
                 <div class="modal-header">
                     <h4 class="modal-title">Configure Replication Task</h4>
                 </div>
                 <div class="modal-body">
+                    <ol class="replication-ct-steps" aria-label="Replication configuration steps">
+                        <li class="active" data-step="1"><span>1</span>Source</li>
+                        <li data-step="2"><span>2</span>Retention</li>
+                        <li data-step="3"><span>3</span>Destination</li>
+                        <li data-step="4"><span>4</span>Review &amp; Logs</li>
+                    </ol>
+                    <section class="replication-ct-step" data-step="1">
+                        <h5>Source dataset</h5>
+                        <p class="help-block">Choose whether child datasets are included and how much memory can be used while streaming snapshots.</p>
+                        <div class="ct-form">
+                            <label class="control-label">Dataset</label>
+                            <div><strong>${filesystem.name}</strong></div>
+                        </div>
                     <div class="ct-form">
                         <label class="control-label">Recursive</label>
                         <div id="validationwrapper-storagepool-replication-task-` + filesystem.id + `">
                             <input id="input-storagepool-replication-task-recursive-` + filesystem.id + `" class="privileged-modal" data-field="name" data-field-type="text-input" tabindex="2" type="checkbox"${repTask && recursive ? ' checked' : ''}>
-                        </div>
-                        <label class="control-label">Destination</label>
-                        <div id="validationwrapper-storagepool-replication-task-` + filesystem.id + `">
-                            <input id="input-storagepool-replication-task-use-destination-` + filesystem.id + `" class="privileged-modal" data-field="name" data-field-type="text-input" tabindex="2" type="checkbox" ${repTask && useDst ? ' checked' : ''}>
                         </div>
                         <label class="control-label">mBuffer Size</label>
                         <div id="validationwrapper-storagepool-replication-task-` + filesystem.id + `" class="ct-validation-wrapper">
@@ -21194,13 +21206,51 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                             </div>
                         </div>
                     </div>
+                    </section>
+                    <section class="replication-ct-step hidden" data-step="2">
+                        <h5>Snapshot schedule and retention</h5>
+                        <p class="help-block">Each plan defines how long snapshots are retained and how often they are created. Multiple plans can be combined.</p>
+                        <div class="ct-form replication-ct-preset">
+                            <label class="control-label" for="select-replication-task-src-preset-${filesystem.id}">Friendly preset</label>
+                            <select id="select-replication-task-src-preset-${filesystem.id}" class="form-control">
+                                <option value="hourly"${repTask ? '' : ' selected'}>Hourly — keep 7 days</option>
+                                <option value="daily">Daily — keep 30 days</option>
+                                <option value="balanced">Balanced — hourly, daily and weekly history</option>
+                                <option value="longterm">Long-term — daily, weekly and monthly history</option>
+                                <option value="custom"${repTask ? ' selected' : ''}>Custom</option>
+                            </select>
+                            <span></span>
+                            <p id="replication-task-src-preset-help-${filesystem.id}" class="help-block"></p>
+                        </div>
                     <div class="mt-2">
                         <h5 class="modal-title">Source Plans <a href="#" id="storagepool-replication-task-add-src-` + filesystem.id + `">&plus;</a></h5>
                         <div id="src-storagepool-replication-task-` + filesystem.id + `"></div>
                         <script nonce="1t55lZ7tzuKTreHVNwE66Ox32Mc=">${srcScript}</script>
                     </div>
+                    </section>
+                    <section class="replication-ct-step hidden" data-step="3">
+                        <h5>Replication destination</h5>
+                        <p class="help-block">The destination is optional. Without it, znapzend only manages snapshots and retention on the source.</p>
+                        <div class="ct-form">
+                            <label class="control-label">Enable replication</label>
+                            <div>
+                                <input id="input-storagepool-replication-task-use-destination-` + filesystem.id + `" class="privileged-modal" type="checkbox" ${repTask && useDst ? ' checked' : ''}>
+                            </div>
+                        </div>
                     <div class="mt-2" id="storagepool-replication-task-dst-plans-` + filesystem.id + `">
                         <h5 class="modal-title">Destination Plans <a href="#" id="storagepool-replication-task-add-dst-` + filesystem.id + `">&plus;</a></h5>
+                        <div class="ct-form replication-ct-preset">
+                            <label class="control-label" for="select-replication-task-dst-preset-${filesystem.id}">Destination retention preset</label>
+                            <select id="select-replication-task-dst-preset-${filesystem.id}" class="form-control">
+                                <option value="month"${repTask && useDst ? '' : ' selected'}>Standard — keep 30 days</option>
+                                <option value="quarter">Extended — keep 90 days</option>
+                                <option value="archive">Archive — keep weekly and monthly history</option>
+                                <option value="mirror">Same retention as source</option>
+                                <option value="custom"${repTask && useDst ? ' selected' : ''}>Custom</option>
+                            </select>
+                            <span></span>
+                            <p id="replication-task-dst-preset-help-${filesystem.id}" class="help-block"></p>
+                        </div>
                         <div id="dst-storagepool-replication-task-` + filesystem.id + `"></div>
                         <script nonce="1t55lZ7tzuKTreHVNwE66Ox32Mc=">${repTask && useDst ? dstScript : ''}</script>
                     </div>
@@ -21225,6 +21275,19 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                             <span id="helpblock-storagepool-replication-task-` + filesystem.id + `" class="help-block"></span>
                         </div>
                     </div>
+                    </section>
+                    <section class="replication-ct-step hidden" data-step="4">
+                        <h5>Review configuration</h5>
+                        <div id="replication-task-validation-${filesystem.id}" class="alert alert-danger hidden"></div>
+                        <pre id="replication-task-summary-${filesystem.id}" class="replication-ct-log"></pre>
+                        <h5>Configuration activity</h5>
+                        <pre id="replication-task-operation-log-${filesystem.id}" class="replication-ct-log">No configuration attempt has been made in this session.</pre>
+                        <div class="replication-ct-log-heading">
+                            <h5>znapzend service logs</h5>
+                            <button id="btn-replication-task-logs-${filesystem.id}" class="btn btn-default" type="button">Refresh logs</button>
+                        </div>
+                        <pre id="replication-task-logs-${filesystem.id}" class="replication-ct-log">Open this step or click Refresh logs to inspect the service.</pre>
+                    </section>
                 </div>
                 <div class="modal-footer">
                     <div></div>
@@ -21233,8 +21296,10 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     </div>
                     <div class="modal-ct-buttons">
                         <button class="btn btn-default cancel" data-dismiss="modal" tabindex="-1">Cancel</button>
+                        <button id="btn-replication-task-back-${filesystem.id}" class="btn btn-default hidden" type="button">Back</button>
+                        <button id="btn-replication-task-next-${filesystem.id}" class="btn btn-primary" type="button">Next</button>
                         ${filesystem.replicationtask ? `<button id="btn-storagepool-replication-task-delete-${filesystem.id}" class="btn btn-danger apply privileged-modal" tabindex="-1">Delete</button>` : ''}
-                        <button id="btn-storagepool-replication-task-configure-run-` + filesystem.id + `" class="btn btn-primary apply privileged-modal" tabindex="-1">Configure</button>
+                        <button id="btn-storagepool-replication-task-configure-run-` + filesystem.id + `" class="btn btn-primary apply privileged-modal hidden" tabindex="-1">Apply configuration</button>
                     </div>
                 </div>
             </div>
@@ -21243,6 +21308,199 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                 ${repTask && destination.external ? '' : `$(".external-storagepool-replication-task-item-${filesystem.id}").css('display', 'none');`}
                 ${repTask && useDst ? '' : `$("#storagepool-replication-task-dst-plans-${filesystem.id}").css('display', 'none');`}
                 ${repTask && useDst ? '' : `$("#storagepool-replication-task-dst-inputs-${filesystem.id}").css('display', 'none');`}
+
+                let replicationWizardStep = 1;
+
+                function replicationErrorText(error) {
+                    if (!error) return "Unknown error returned by znapzend.";
+                    let details = [error.message || String(error)];
+                    if (error.problem) details.push("Problem: " + error.problem);
+                    if (error.exit_status !== undefined) details.push("Exit status: " + error.exit_status);
+                    return details.filter(Boolean).join("\n");
+                }
+
+                function replicationRefreshLogs() {
+                    let output = $("#replication-task-logs-${filesystem.id}");
+                    output.text("Loading znapzend service logs...");
+                    cockpit.spawn(["journalctl", "-u", "znapzend", "-n", "80", "--no-pager", "--output=short-iso"], { err: "out", superuser: "try" })
+                        .then(data => output.text(data.trim() || "No znapzend service entries were found."))
+                        .catch(error => output.text("Unable to read the znapzend service log.\n" + replicationErrorText(error)));
+                }
+
+                function replicationReview() {
+                    let recursive = $("#input-storagepool-replication-task-recursive-${filesystem.id}").prop("checked") ? "Yes" : "No";
+                    let destinationEnabled = $("#input-storagepool-replication-task-use-destination-${filesystem.id}").prop("checked");
+                    let destinationDataset = $("#input-storagepool-replication-task-dst-dataset-${filesystem.id}").val();
+                    let external = $("#input-storagepool-replication-task-external-${filesystem.id}").prop("checked");
+                    let location = destinationDataset || "Not configured";
+                    if (destinationEnabled && external) {
+                        location = $("#input-storagepool-replication-task-user-${filesystem.id}").val() + "@" + $("#input-storagepool-replication-task-host-${filesystem.id}").val() + ":" + destinationDataset;
+                    }
+                    let sourcePlans = [];
+                    $('#src-storagepool-replication-task-${filesystem.id} > [data-type="src"]').each((i, el) => {
+                        let id = el.dataset.id;
+                        sourcePlans.push($("#input-storagepool-replication-task-src-ret-" + id).val() + " " + $("#btnspan-storagepool-replication-task-src-ret-unit-" + id).text() + " retention / every " + $("#input-storagepool-replication-task-src-int-" + id).val() + " " + $("#btnspan-storagepool-replication-task-src-int-unit-" + id).text());
+                    });
+                    let destinationPlans = [];
+                    $('#dst-storagepool-replication-task-${filesystem.id} > [data-type="dst"]').each((i, el) => {
+                        let id = el.dataset.id;
+                        destinationPlans.push($("#input-storagepool-replication-task-dst-ret-" + id).val() + " " + $("#btnspan-storagepool-replication-task-dst-ret-unit-" + id).text() + " retention / every " + $("#input-storagepool-replication-task-dst-int-" + id).val() + " " + $("#btnspan-storagepool-replication-task-dst-int-unit-" + id).text());
+                    });
+                    $("#replication-task-summary-${filesystem.id}").text([
+                        "Source: ${filesystem.name}",
+                        "Recursive: " + recursive,
+                        "mBuffer: " + $("#input-storagepool-replication-task-mbuffersize-${filesystem.id}").val() + $("#btnspan-storagepool-replication-task-mbuffersize-unit-${filesystem.id}").text(),
+                        "Source retention plans:\n  - " + sourcePlans.join("\n  - "),
+                        "Replication enabled: " + (destinationEnabled ? "Yes" : "No"),
+                        "Destination: " + (destinationEnabled ? location : "Snapshots only; no replication destination"),
+                        destinationEnabled ? "Destination retention plans:\n  - " + destinationPlans.join("\n  - ") : ""
+                    ].filter(Boolean).join("\n"));
+                }
+
+                function replicationValidationErrors() {
+                    let errors = [];
+                    let mBufferSize = Number($("#input-storagepool-replication-task-mbuffersize-${filesystem.id}").val());
+                    let sourcePlans = $('#src-storagepool-replication-task-${filesystem.id} > [data-type="src"]');
+                    let destinationEnabled = $("#input-storagepool-replication-task-use-destination-${filesystem.id}").prop("checked");
+                    let destinationPlans = $('#dst-storagepool-replication-task-${filesystem.id} > [data-type="dst"]');
+                    let external = $("#input-storagepool-replication-task-external-${filesystem.id}").prop("checked");
+                    if (!Number.isFinite(mBufferSize) || mBufferSize <= 0) errors.push("mBuffer size must be greater than zero.");
+                    if (!sourcePlans.length) errors.push("Add at least one source retention plan.");
+                    sourcePlans.each((i, el) => {
+                        let id = el.dataset.id;
+                        if (Number($("#input-storagepool-replication-task-src-ret-" + id).val()) <= 0 || Number($("#input-storagepool-replication-task-src-int-" + id).val()) <= 0) errors.push("Source retention and interval values must be greater than zero.");
+                    });
+                    if (destinationEnabled && !$("#input-storagepool-replication-task-dst-dataset-${filesystem.id}").val().trim()) errors.push("Enter the destination dataset.");
+                    if (destinationEnabled && !destinationPlans.length) errors.push("Add at least one destination retention plan.");
+                    if (destinationEnabled) destinationPlans.each((i, el) => {
+                        let id = el.dataset.id;
+                        if (Number($("#input-storagepool-replication-task-dst-ret-" + id).val()) <= 0 || Number($("#input-storagepool-replication-task-dst-int-" + id).val()) <= 0) errors.push("Destination retention and interval values must be greater than zero.");
+                    });
+                    if (destinationEnabled && external && !$("#input-storagepool-replication-task-user-${filesystem.id}").val().trim()) errors.push("Enter the SSH user for the external destination.");
+                    if (destinationEnabled && external && !$("#input-storagepool-replication-task-host-${filesystem.id}").val().trim()) errors.push("Enter the host for the external destination.");
+                    return errors;
+                }
+
+                function replicationShowStep(step) {
+                    replicationWizardStep = Math.max(1, Math.min(4, step));
+                    $(".replication-ct-step").addClass("hidden").filter('[data-step="' + replicationWizardStep + '"]').removeClass("hidden");
+                    $(".replication-ct-steps li").removeClass("active complete").each(function () {
+                        let itemStep = Number($(this).attr("data-step"));
+                        $(this).toggleClass("active", itemStep === replicationWizardStep).toggleClass("complete", itemStep < replicationWizardStep);
+                    });
+                    $("#btn-replication-task-back-${filesystem.id}").toggleClass("hidden", replicationWizardStep === 1);
+                    $("#btn-replication-task-next-${filesystem.id}").toggleClass("hidden", replicationWizardStep === 4);
+                    $("#btn-storagepool-replication-task-configure-run-${filesystem.id}").toggleClass("hidden", replicationWizardStep !== 4);
+                    if (replicationWizardStep === 4) {
+                        replicationReview();
+                        replicationRefreshLogs();
+                    }
+                }
+
+                $("#btn-replication-task-back-${filesystem.id}").on("click", () => replicationShowStep(replicationWizardStep - 1));
+                $("#btn-replication-task-next-${filesystem.id}").on("click", () => replicationShowStep(replicationWizardStep + 1));
+                $(".replication-ct-steps li").on("click", function () { replicationShowStep(Number($(this).attr("data-step"))); });
+                $("#btn-replication-task-logs-${filesystem.id}").on("click", replicationRefreshLogs);
+
+                const replicationSourcePresets = {
+                    hourly: {
+                        description: "Creates a snapshot every hour and keeps seven days of history.",
+                        plans: [{ ret: "7", retUnit: "Day", int: "1", intUnit: "Hour" }]
+                    },
+                    daily: {
+                        description: "Creates one snapshot per day and keeps thirty days of history.",
+                        plans: [{ ret: "30", retUnit: "Day", int: "1", intUnit: "Day" }]
+                    },
+                    balanced: {
+                        description: "Keeps hourly snapshots for 7 days, daily snapshots for 30 days and weekly snapshots for 1 year.",
+                        plans: [
+                            { ret: "7", retUnit: "Day", int: "1", intUnit: "Hour" },
+                            { ret: "30", retUnit: "Day", int: "1", intUnit: "Day" },
+                            { ret: "1", retUnit: "Year", int: "1", intUnit: "Week" }
+                        ]
+                    },
+                    longterm: {
+                        description: "Keeps daily snapshots for 30 days, weekly snapshots for 1 year and monthly snapshots for 5 years.",
+                        plans: [
+                            { ret: "30", retUnit: "Day", int: "1", intUnit: "Day" },
+                            { ret: "1", retUnit: "Year", int: "1", intUnit: "Week" },
+                            { ret: "5", retUnit: "Year", int: "1", intUnit: "Month" }
+                        ]
+                    }
+                };
+
+                const replicationDestinationPresets = {
+                    month: {
+                        description: "Keeps destination snapshots for 30 days with hourly recovery points.",
+                        plans: [{ ret: "30", retUnit: "Day", int: "1", intUnit: "Hour" }]
+                    },
+                    quarter: {
+                        description: "Keeps destination snapshots for 90 days with daily recovery points.",
+                        plans: [{ ret: "90", retUnit: "Day", int: "1", intUnit: "Day" }]
+                    },
+                    archive: {
+                        description: "Keeps weekly recovery points for 1 year and monthly recovery points for 5 years.",
+                        plans: [
+                            { ret: "1", retUnit: "Year", int: "1", intUnit: "Week" },
+                            { ret: "5", retUnit: "Year", int: "1", intUnit: "Month" }
+                        ]
+                    }
+                };
+
+                function replicationSourcePlanValues() {
+                    let plans = [];
+                    $('#src-storagepool-replication-task-${filesystem.id} > [data-type="src"]').each((i, el) => {
+                        let id = el.dataset.id;
+                        plans.push({
+                            ret: $("#input-storagepool-replication-task-src-ret-" + id).val(),
+                            retUnit: $("#btnspan-storagepool-replication-task-src-ret-unit-" + id).text(),
+                            int: $("#input-storagepool-replication-task-src-int-" + id).val(),
+                            intUnit: $("#btnspan-storagepool-replication-task-src-int-unit-" + id).text()
+                        });
+                    });
+                    return plans;
+                }
+
+                $("#select-replication-task-src-preset-${filesystem.id}").on("change", function () {
+                    let preset = replicationSourcePresets[this.value];
+                    if (!preset) {
+                        $("#replication-task-src-preset-help-${filesystem.id}").text("Manually configure one or more retention plans below.");
+                        return;
+                    }
+                    $("#replication-task-src-preset-help-${filesystem.id}").text(preset.description);
+                    $("#src-storagepool-replication-task-${filesystem.id}").empty();
+                    preset.plans.forEach(plan => AddSrcPlan("#src-storagepool-replication-task-${filesystem.id}", plan));
+                }).trigger("change");
+
+                $("#select-replication-task-dst-preset-${filesystem.id}").on("change", function () {
+                    let preset = replicationDestinationPresets[this.value];
+                    if (this.value === "mirror") {
+                        preset = { description: "Uses the same schedule and retention policy configured for the source.", plans: replicationSourcePlanValues() };
+                    }
+                    if (!preset) {
+                        $("#replication-task-dst-preset-help-${filesystem.id}").text("Manually configure one or more destination retention plans below.");
+                        return;
+                    }
+                    $("#replication-task-dst-preset-help-${filesystem.id}").text(preset.description);
+                    $("#dst-storagepool-replication-task-${filesystem.id}").empty();
+                    preset.plans.forEach(plan => AddDstPlan("#dst-storagepool-replication-task-${filesystem.id}", plan));
+                }).trigger("change");
+
+                $("#src-storagepool-replication-task-${filesystem.id}").on("input", "input", () => {
+                    $("#select-replication-task-src-preset-${filesystem.id}").val("custom");
+                    $("#replication-task-src-preset-help-${filesystem.id}").text("Custom plan — values were adjusted manually.");
+                }).on("click", ".dropdown-menu a", () => {
+                    $("#select-replication-task-src-preset-${filesystem.id}").val("custom");
+                    $("#replication-task-src-preset-help-${filesystem.id}").text("Custom plan — values were adjusted manually.");
+                });
+
+                $("#dst-storagepool-replication-task-${filesystem.id}").on("input", "input", () => {
+                    $("#select-replication-task-dst-preset-${filesystem.id}").val("custom");
+                    $("#replication-task-dst-preset-help-${filesystem.id}").text("Custom plan — values were adjusted manually.");
+                }).on("click", ".dropdown-menu a", () => {
+                    $("#select-replication-task-dst-preset-${filesystem.id}").val("custom");
+                    $("#replication-task-dst-preset-help-${filesystem.id}").text("Custom plan — values were adjusted manually.");
+                });
 
                 $("#dropdown-storagepool-replication-task-mbuffersize-unit-` + filesystem.id + `").on("click", "li a", function () {
                     $("#btnspan-storagepool-replication-task-mbuffersize-unit-` + filesystem.id + `").text($(this).text()).attr("data-field-value", $(this).parent().attr("value"));
@@ -21265,17 +21523,23 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     $("#storagepool-replication-task-dst-inputs-` + filesystem.id + `").css('display', checked ? 'grid' : 'none');
 
                     if (checked) {
-                        AddDstPlan("#dst-storagepool-replication-task-` + filesystem.id + `");
+                        if (!$("#dst-storagepool-replication-task-` + filesystem.id + `").children().length) {
+                            AddDstPlan("#dst-storagepool-replication-task-` + filesystem.id + `");
+                        }
                     } else {
                         $("#dst-storagepool-replication-task-` + filesystem.id + `").empty();
                     }
                 });
 
-                $("#storagepool-replication-task-add-src-` + filesystem.id + `").on("click", () => {
+                $("#storagepool-replication-task-add-src-` + filesystem.id + `").on("click", event => {
+                    event.preventDefault();
+                    $("#select-replication-task-src-preset-${filesystem.id}").val("custom").trigger("change");
                     AddSrcPlan("#src-storagepool-replication-task-` + filesystem.id + `");
                 });
 
-                $("#storagepool-replication-task-add-dst-` + filesystem.id + `").on("click", () => {
+                $("#storagepool-replication-task-add-dst-` + filesystem.id + `").on("click", event => {
+                    event.preventDefault();
+                    $("#select-replication-task-dst-preset-${filesystem.id}").val("custom").trigger("change");
                     AddDstPlan("#dst-storagepool-replication-task-` + filesystem.id + `");
                 });
 
@@ -21290,6 +21554,11 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                 }
 
                 $("#btn-storagepool-replication-task-configure-run-${filesystem.id}").on("click", () => {
+                    let validationErrors = replicationValidationErrors();
+                    if (validationErrors.length) {
+                        $("#replication-task-validation-${filesystem.id}").removeClass("hidden").html("<strong>Correct these fields before applying:</strong><ul><li>" + validationErrors.join("</li><li>") + "</li></ul>");
+                        return;
+                    }
                     let recursive = $("#input-storagepool-replication-task-recursive-` + filesystem.id + `").get(0).checked;
                     let useDestination = $("#input-storagepool-replication-task-use-destination-` + filesystem.id + `").get(0).checked;
                     
@@ -21355,8 +21624,8 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
 
                     let command = [
                         'znapzendzetup',
-                        'create',
-                        recursive ? '--recursive' : null,
+                        '${filesystem.replicationtask ? 'edit' : 'create'}',
+                        ${filesystem.replicationtask ? "recursive ? '--recursive=on' : '--recursive=off'" : "recursive ? '--recursive' : null"},
                         '--donotask',
                         '--mbuffer=/usr/bin/mbuffer',
                         \`--mbuffersize=\${mBufferSize}\`,
@@ -21373,15 +21642,27 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
 
                     $("#spinner-storagepool-replication-task-configure-${filesystem.id}").removeClass("hidden");
                     $("#spinner-storagepool-replication-task-configure-${filesystem.id} span").text("Configuring replication task...");
+                    $("#replication-task-validation-${filesystem.id}").addClass("hidden").empty();
+                    $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Running:\n" + command.join(" ") + "\n\nWaiting for znapzendzetup...");
 
-                    let process = cockpit.spawn(command, { err: "out", superuser: "require" });
+                    let runConfiguration = () => cockpit.spawn(command, { err: "out", superuser: "require" });
+                    let removeOldDestination = ${repTask && useDst} && !useDestination;
+                    let process = removeOldDestination
+                        ? cockpit.spawn(['znapzendzetup', 'delete', '--dst=a', '${filesystem.name}'], { err: "out", superuser: "require" }).then(runConfiguration)
+                        : runConfiguration();
 
                     process.then(data => {
+                        $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Configuration completed successfully.\n\nCommand:\n" + command.join(" ") + "\n\nOutput:\n" + (data || "No output."));
                         FnReplicationTaskCreate({ name: '${filesystem.name}' }, { name: '${pool.name}', id: '${pool.id}' }, { tag: '${modal.tag}' });
                     });
 
-                    process.catch(error => {
-                        FnDisplayAlert({ status: "danger", title: "Replication task could not be configured", description: '${filesystem.name}', breakword: false }, { name: "replicationtask-configure" });
+                    process.fail((error, output) => {
+                        let details = [output, replicationErrorText(error)].filter(Boolean).join("\n").trim();
+                        replicationShowStep(4);
+                        $("#spinner-storagepool-replication-task-configure-${filesystem.id}").addClass("hidden");
+                        $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text("znapzend could not save this configuration. Review the detailed output below.");
+                        $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Configuration failed.\n\nCommand:\n" + command.join(" ") + "\n\nError:\n" + details);
+                        FnDisplayAlert({ status: "danger", title: "Replication task could not be configured", description: "The detailed znapzend error is available in Review & Logs.", breakword: false }, { name: "replicationtask-configure" });
                     });
                 });
 
@@ -21393,12 +21674,19 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
 
                     let process = cockpit.spawn(command, { err: "out", superuser: "require" });
 
+                    $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Running:\n" + command.join(" ") + "\n\nWaiting for znapzendzetup...");
+
                     process.then(data => {
                         FnReplicationTaskDelete({ name: '${filesystem.name}' }, { name: '${pool.name}', id: '${pool.id}' }, { tag: '${modal.tag}' });
                     });
 
-                    process.catch(error => {
-                        FnDisplayAlert({ status: "danger", title: "Replication task could not be deleted", description: '${filesystem.name}', breakword: false }, { name: "replicationtask-delete" });
+                    process.fail((error, output) => {
+                        let details = [output, replicationErrorText(error)].filter(Boolean).join("\n").trim();
+                        replicationShowStep(4);
+                        $("#spinner-storagepool-replication-task-configure-${filesystem.id}").addClass("hidden");
+                        $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text("znapzend could not delete this configuration. Review the detailed output below.");
+                        $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Delete failed.\n\nCommand:\n" + command.join(" ") + "\n\nError:\n" + details);
+                        FnDisplayAlert({ status: "danger", title: "Replication task could not be deleted", description: "The detailed znapzend error is available in Review & Logs.", breakword: false }, { name: "replicationtask-delete" });
                     });
                 });
             </script>
@@ -21406,6 +21694,9 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
     `;
 
     modal.id.empty().append(modal.content);
+    if (loadError) {
+        $("#replication-task-operation-log-" + filesystem.id).text("Unable to load the existing znapzend configuration:\n" + loadError);
+    }
 }
 
 function FnReplicationTaskCreate(filesystem, pool, modal) {
@@ -21432,7 +21723,7 @@ function FnReplicationTaskDelete(filesystem, pool, modal) {
     }, 700);
 }
 
-function AddSrcPlan(element, data = { ret: '1', retUnit: 'Second', int: '1', intUnit: 'Second', }) {
+function AddSrcPlan(element, data = { ret: '7', retUnit: 'Day', int: '1', intUnit: 'Hour', }) {
     let id = Math.floor(Math.random() * 1000);
 
     $(element).append(`
@@ -21484,7 +21775,13 @@ function AddSrcPlan(element, data = { ret: '1', retUnit: 'Second', int: '1', int
                 </ul>
             </div>
         </div>
+        <div></div>
+        <div><button class="btn btn-link replication-ct-plan-remove" type="button">Remove plan</button></div>
         <script nonce="1t55lZ7tzuKTreHVNwE66Ox32Mc=">
+            $("[data-type='src'][data-id='${id}'] .replication-ct-plan-remove").on("click", function () {
+                $(this).closest(".modal").find("select[id^='select-replication-task-src-preset']").val("custom").trigger("change");
+                $(this).closest(".plan-wrapper").remove();
+            });
             $("#dropdown-storagepool-replication-task-src-ret-unit-${id}").on("click", "li a", function () {
                 $("#btnspan-storagepool-replication-task-src-ret-unit-${id}").text($(this).text()).attr("data-field-value", $(this).parent().attr("value"));
                 $(this).parent().siblings().removeClass("active");
@@ -21501,7 +21798,7 @@ function AddSrcPlan(element, data = { ret: '1', retUnit: 'Second', int: '1', int
 `);
 }
 
-function AddDstPlan(element, data = { ret: '1', retUnit: 'Second', int: '1', intUnit: 'Second', }) {
+function AddDstPlan(element, data = { ret: '30', retUnit: 'Day', int: '1', intUnit: 'Hour', }) {
     let id = Math.floor(Math.random() * 1000);
 
     $(element).append(`
@@ -21554,7 +21851,13 @@ function AddDstPlan(element, data = { ret: '1', retUnit: 'Second', int: '1', int
             </div>
         </div>
 
+        <div></div>
+        <div><button class="btn btn-link replication-ct-plan-remove" type="button">Remove plan</button></div>
         <script nonce="1t55lZ7tzuKTreHVNwE66Ox32Mc=">
+            $("[data-type='dst'][data-id='${id}'] .replication-ct-plan-remove").on("click", function () {
+                $(this).closest(".modal").find("select[id^='select-replication-task-dst-preset']").val("custom").trigger("change");
+                $(this).closest(".plan-wrapper").remove();
+            });
             $("#dropdown-storagepool-replication-task-dst-ret-unit-${id}").on("click", "li a", function () {
                 $("#btnspan-storagepool-replication-task-dst-ret-unit-${id}").text($(this).text()).attr("data-field-value", $(this).parent().attr("value"));
                 $(this).parent().siblings().removeClass("active");
