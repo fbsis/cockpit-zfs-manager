@@ -7240,6 +7240,12 @@ h6.modal-title {
     font-family: "Glyphicons Halflings" !important;
 }
 
+/* Bootstrap selects render their arrow through a legacy Font Awesome codepoint. */
+.caret::before {
+    font-family: "Glyphicons Halflings";
+    content: "\e114";
+}
+
 .pficon-close::before,
 .fa-times::before { content: "\e014"; }
 .pficon-enhancement::before { content: "\e006"; }
