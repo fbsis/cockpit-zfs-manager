@@ -13,6 +13,7 @@ function FnReplicationWizardShowStep(modal, step) {
     $modal.find("[id^='btn-replication-task-back-']").toggleClass("hidden", nextStep === 1);
     $modal.find("[id^='btn-replication-task-next-']").toggleClass("hidden", nextStep === 4);
     $modal.find("[id^='btn-storagepool-replication-task-configure-run-']").toggleClass("hidden", nextStep !== 4);
+    $modal.find("[id^='btn-storagepool-replication-task-apply-run-now-']").toggleClass("hidden", nextStep !== 4);
 
     if (nextStep === 4) {
         $modal.trigger("replication-wizard-review");
@@ -94,6 +95,33 @@ function replicationEscapeHtml(value) {
     })[character]);
 }
 
+async function replicationFindExecutable(name, candidates) {
+    try {
+        let detected = await cockpit.spawn(['/bin/sh', '-c', 'command -v "$1"', 'cockpit-zfs-manager', name], { err: "out", superuser: "try" });
+        if (detected.trim()) return detected.trim();
+    } catch (error) {
+        // Try known installation paths below.
+    }
+
+    for (const candidate of candidates) {
+        try {
+            let detected = await cockpit.spawn(['/bin/sh', '-c', 'test -x "$1" && printf "%s" "$1"', 'cockpit-zfs-manager', candidate], { err: "out", superuser: "try" });
+            if (detected.trim()) return detected.trim();
+        } catch (error) {
+            // Continue checking the remaining known paths.
+        }
+    }
+
+    try {
+        let detected = await cockpit.spawn(['/bin/sh', '-c', 'find /opt -maxdepth 3 -type f -name "$1" -perm -111 -print -quit 2>/dev/null', 'cockpit-zfs-manager', name], { err: "out", superuser: "try" });
+        if (detected.trim()) return detected.trim();
+    } catch (error) {
+        // No executable with this name was found under /opt.
+    }
+
+    return null;
+}
+
 function FnModalReplicationTaskCreate(pool, filesystem) {
     let modal = {
         window: ""
@@ -131,12 +159,26 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
     let loadError = "";
     let localPoolNames = [pool.name];
     let localDatasetNames = [];
+    let znapzendCommand = await replicationFindExecutable('znapzend', [
+        '/usr/bin/znapzend',
+        '/usr/local/bin/znapzend',
+        '/opt/znapzend/bin/znapzend',
+    ]);
+    let znapzendSetupCommand = await replicationFindExecutable('znapzendzetup', [
+        '/usr/bin/znapzendzetup',
+        '/usr/local/bin/znapzendzetup',
+        '/opt/znapzend/bin/znapzendzetup',
+    ]);
+    let mbufferCommand = await replicationFindExecutable('mbuffer', [
+        '/usr/bin/mbuffer',
+        '/usr/local/bin/mbuffer',
+    ]);
 
-    if (filesystem.replicationtask) {
+    if (filesystem.replicationtask && znapzendSetupCommand) {
         try {
             repTask = true;
 
-            let command = ['znapzendzetup', 'list', filesystem.name];
+            let command = [znapzendSetupCommand, 'list', filesystem.name];
 
             let content = await cockpit.spawn(command, { err: "out", superuser: "require" });
             let lines = content.split('\n');
@@ -165,6 +207,8 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
             loadError = error.message || String(error);
             FnDisplayAlert({ status: "danger", title: "Replication task could not be loaded", description: "Open Review & Logs for details.", breakword: false }, { name: "replicationtask-configure" });
         }
+    } else if (filesystem.replicationtask) {
+        loadError = "znapzendzetup was not found. Install znapzend on this server before loading or editing replication tasks.";
     }
 
     try {
@@ -201,6 +245,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     <section class="replication-ct-step" data-step="1">
                         <h5>Source dataset</h5>
                         <p class="help-block">Choose whether child datasets are included and select a transfer profile suitable for this server.</p>
+                        ${!znapzendCommand || !znapzendSetupCommand || !mbufferCommand ? `<div class="alert alert-danger"><strong>Replication prerequisites are missing.</strong><br>${!znapzendCommand ? '<code>znapzend</code> was not found. Install znapzend on this server.<br>' : ''}${!znapzendSetupCommand ? '<code>znapzendzetup</code> was not found. Install znapzend on this server.<br>' : ''}${!mbufferCommand ? '<code>mbuffer</code> was not found. Install the mbuffer package.' : ''}</div>` : ''}
                         <div class="ct-form">
                             <label class="control-label">Dataset</label>
                             <div><strong>${filesystem.name}</strong></div>
@@ -382,6 +427,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         <button id="btn-replication-task-next-${filesystem.id}" class="btn btn-primary" type="button">Next</button>
                         ${filesystem.replicationtask ? `<button id="btn-storagepool-replication-task-delete-${filesystem.id}" class="btn btn-danger apply privileged-modal" tabindex="-1">Delete</button>` : ''}
                         <button id="btn-storagepool-replication-task-configure-run-` + filesystem.id + `" class="btn btn-primary apply privileged-modal hidden" tabindex="-1" type="button">Apply configuration</button>
+                        <button id="btn-storagepool-replication-task-apply-run-now-` + filesystem.id + `" class="btn btn-primary apply privileged-modal hidden" tabindex="-1" type="button">Apply &amp; run now</button>
                     </div>
                 </div>
             </div>
@@ -393,6 +439,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
 
                 function replicationErrorText(error) {
                     if (!error) return "Unknown error returned by znapzend.";
+                    if (error.problem === "not-found") return "The replication executable could not be started. Verify that znapzendzetup and mbuffer are installed and executable.";
                     let details = [error.message || String(error)];
                     if (error.problem) details.push("Problem: " + error.problem);
                     if (error.exit_status !== undefined) details.push("Exit status: " + error.exit_status);
@@ -466,6 +513,9 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     let destinationEnabled = $("#input-storagepool-replication-task-use-destination-${filesystem.id}").prop("checked");
                     let destinationPlans = $('#dst-storagepool-replication-task-${filesystem.id} > [data-type="dst"]');
                     let external = $("#input-storagepool-replication-task-external-${filesystem.id}").prop("checked");
+                    if (!${JSON.stringify(!!znapzendCommand)}) errors.push("znapzend was not found. Install znapzend on this server.");
+                    if (!${JSON.stringify(!!znapzendSetupCommand)}) errors.push("znapzendzetup was not found. Install the znapzend package on this server.");
+                    if (!${JSON.stringify(!!mbufferCommand)}) errors.push("mbuffer was not found. Install the mbuffer package on this server.");
                     if (!Number.isFinite(mBufferSize) || mBufferSize <= 0) errors.push("mBuffer size must be greater than zero.");
                     if (!sourcePlans.length) errors.push("Add at least one source retention plan.");
                     sourcePlans.each((i, el) => {
@@ -734,8 +784,9 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     if (x.match(/year/gi)) return 'y';
                 }
 
-                $("#btn-storagepool-replication-task-configure-run-${filesystem.id}").on("click", event => {
+                $("#btn-storagepool-replication-task-configure-run-${filesystem.id}, #btn-storagepool-replication-task-apply-run-now-${filesystem.id}").on("click", event => {
                     event.preventDefault();
+                    let runNow = event.currentTarget.id === "btn-storagepool-replication-task-apply-run-now-${filesystem.id}";
                     $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Preparing replication configuration...");
                     try {
                     let validationErrors = replicationValidationErrors();
@@ -759,6 +810,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     let srcDataset = '${filesystem.name}';
 
                     let external = $("#input-storagepool-replication-task-external-${filesystem.id}").get(0).checked;
+                    let createDestinationDataset = useDestination && !external && $("#select-storagepool-replication-task-dst-dataset-${filesystem.id}").val() === "__custom__";
 
                     let mBufferSize = mBufferSizeValue + mBufferSizeUnit;
                     let srcPlans = [];
@@ -807,11 +859,11 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     let dstPlan = dstPlans.map(i => \`\${i.ret}=>\${i.int}\`).join(',');
 
                     let command = [
-                        'znapzendzetup',
+                        ${JSON.stringify(znapzendSetupCommand || 'znapzendzetup')},
                         '${filesystem.replicationtask ? 'edit' : 'create'}',
                         ${filesystem.replicationtask ? "recursive ? '--recursive=on' : '--recursive=off'" : "recursive ? '--recursive' : null"},
                         '--donotask',
-                        '--mbuffer=/usr/bin/mbuffer',
+                        ${JSON.stringify('--mbuffer=' + (mbufferCommand || '/usr/bin/mbuffer'))},
                         \`--mbuffersize=\${mBufferSize}\`,
                         'SRC',
                         \`\${srcPlan}\`,
@@ -832,12 +884,43 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     let runConfiguration = () => cockpit.spawn(command, { err: "out", superuser: "require" });
                     let removeOldDestination = ${repTask && useDst} && !useDestination;
                     let process = removeOldDestination
-                        ? cockpit.spawn(['znapzendzetup', 'delete', '--dst=a', '${filesystem.name}'], { err: "out", superuser: "require" }).then(runConfiguration)
+                        ? cockpit.spawn([${JSON.stringify(znapzendSetupCommand || 'znapzendzetup')}, 'delete', '--dst=a', '${filesystem.name}'], { err: "out", superuser: "require" }).then(runConfiguration)
                         : runConfiguration();
 
                     process.then(data => {
-                        $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Configuration completed successfully.\\n\\nCommand:\\n" + command.join(" ") + "\\n\\nOutput:\\n" + (data || "No output."));
-                        FnReplicationTaskCreate({ name: '${filesystem.name}' }, { name: '${pool.name}', id: '${pool.id}' }, { tag: '${modal.tag}' });
+                        let configurationLog = "[" + new Date().toLocaleString() + "] Configuration completed successfully.\\n\\nCommand:\\n" + command.join(" ") + "\\n\\nOutput:\\n" + (data || "No output.");
+                        let postApplyPhase = "service";
+                        $("#replication-task-operation-log-${filesystem.id}").text(configurationLog + "\\n\\nStarting znapzend service...");
+
+                        let destinationSetup = createDestinationDataset
+                            ? cockpit.spawn([${JSON.stringify(znapzendSetupCommand || 'znapzendzetup')}, 'enable-dst-autocreation', '${filesystem.name}', 'a'], { err: "out", superuser: "require" })
+                            : Promise.resolve("");
+
+                        destinationSetup
+                            .then(() => cockpit.spawn(['/usr/bin/systemctl', 'reset-failed', 'znapzend.service'], { err: "out", superuser: "require" }))
+                            .then(() => cockpit.spawn(['/usr/bin/systemctl', 'restart', 'znapzend.service'], { err: "out", superuser: "require" }))
+                            .then(serviceOutput => {
+                                if (!runNow) return { serviceOutput: serviceOutput || "", runOutput: null };
+                                postApplyPhase = "run";
+                                $("#spinner-storagepool-replication-task-configure-${filesystem.id} span").text("Running replication now...");
+                                $("#replication-task-operation-log-${filesystem.id}").text(configurationLog + "\\n\\nService started. Running '${filesystem.name}' now...");
+                                return cockpit.spawn([${JSON.stringify(znapzendCommand || 'znapzend')}, '--nodelay', '--runonce=${filesystem.name}'], { err: "out", superuser: "require" })
+                                    .then(runOutput => ({ serviceOutput: serviceOutput || "", runOutput: runOutput || "No output." }));
+                            })
+                            .then(result => {
+                                let finalLog = configurationLog + "\\n\\nDestination auto-creation: " + (createDestinationDataset ? "Enabled" : "Not required") + "\\nService: znapzend.service started successfully.\\n" + result.serviceOutput;
+                                if (result.runOutput !== null) finalLog += "\\n\\nRun now completed for ${filesystem.name}:\\n" + result.runOutput;
+                                $("#replication-task-operation-log-${filesystem.id}").text(finalLog);
+                                FnReplicationTaskCreate({ name: '${filesystem.name}' }, { name: '${pool.name}', id: '${pool.id}' }, { tag: '${modal.tag}' });
+                            })
+                            .catch(error => {
+                                let details = replicationErrorText(error);
+                                $("#spinner-storagepool-replication-task-configure-${filesystem.id}").addClass("hidden");
+                                let phaseMessage = postApplyPhase === "run" ? "The task was saved and the service was started, but the immediate run failed." : "The task was saved, but the znapzend service could not be started automatically.";
+                                $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text(phaseMessage);
+                                $("#replication-task-operation-log-${filesystem.id}").text(configurationLog + "\\n\\n" + (postApplyPhase === "run" ? "Run now failed" : "Service start failed") + ":\\n" + details);
+                                FnDisplayAlert({ status: "warning", title: postApplyPhase === "run" ? "Replication task saved; run now failed" : "Replication task saved; service not started", description: details, breakword: true }, { name: "replicationtask-configure" });
+                            });
                     });
 
                     process.fail((error, output) => {
@@ -859,7 +942,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                 });
 
                 $("#btn-storagepool-replication-task-delete-${filesystem.id}").on("click", () => {
-                    let command = ['znapzendzetup', 'delete', '${filesystem.name}'];
+                    let command = [${JSON.stringify(znapzendSetupCommand || 'znapzendzetup')}, 'delete', '${filesystem.name}'];
 
                     $("#spinner-storagepool-replication-task-configure-${filesystem.id}").removeClass("hidden");
                     $("#spinner-storagepool-replication-task-configure-${filesystem.id} span").text("Deleting replication task...");
