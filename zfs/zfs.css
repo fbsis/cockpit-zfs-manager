@@ -7224,16 +7224,6 @@ h6.modal-title {
     align-items: center;
 }
 
-/*
- * Cockpit already provides the PatternFly icon font through base1.  The
- * bundled PatternFly 4 stylesheet otherwise overrides .pficon with a font
- * under assets/pficon, which is not shipped by this package and leaves every
- * icon blank after the resulting 404.
- */
-.pficon {
-    font-family: PatternFlyIcons-webfont !important;
-}
-
 /* Use native UI fonts instead of requesting unbundled PatternFly font files. */
 :root {
     --pf-global--FontFamily--sans-serif: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
