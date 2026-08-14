@@ -130,6 +130,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
     let destination;
     let loadError = "";
     let localPoolNames = [pool.name];
+    let localDatasetNames = [];
 
     if (filesystem.replicationtask) {
         try {
@@ -172,6 +173,13 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
         if (!localPoolNames.includes(pool.name)) localPoolNames.push(pool.name);
     } catch (error) {
         // Keep the current pool available when the complete pool list cannot be loaded.
+    }
+
+    try {
+        let datasetList = await cockpit.spawn(['/sbin/zfs', 'list', '-H', '-o', 'name', '-t', 'filesystem'], { err: "out", superuser: "try" });
+        localDatasetNames = datasetList.split('\n').map(name => name.trim()).filter(Boolean);
+    } catch (error) {
+        // The pool root remains selectable if datasets cannot be enumerated.
     }
 
     localPoolNames = [...new Set(localPoolNames)].sort();
@@ -340,10 +348,15 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                             <select id="select-storagepool-replication-task-dst-pool-${filesystem.id}" class="form-control privileged-modal">${localPoolOptions}</select>
                             <span class="help-block">Select one of the pools currently imported on this server.</span>
                         </div>
-                        <label id="label-storagepool-replication-task-dst-dataset-${filesystem.id}" class="control-label">Dataset inside destination pool</label>
-                        <div id="validationwrapper-storagepool-replication-task-` + filesystem.id + `" class="ct-validation-wrapper">
+                        <label class="control-label replication-ct-local-destination-${filesystem.id}">Dataset inside destination pool</label>
+                        <div class="ct-validation-wrapper replication-ct-local-destination-${filesystem.id}">
+                            <select id="select-storagepool-replication-task-dst-dataset-${filesystem.id}" class="form-control privileged-modal"></select>
+                            <span class="help-block">Choose the pool root, an existing dataset, or “Create a new dataset”.</span>
+                        </div>
+                        <label id="label-storagepool-replication-task-dst-dataset-${filesystem.id}" class="control-label replication-ct-manual-destination-${filesystem.id}">New dataset path</label>
+                        <div id="validationwrapper-storagepool-replication-task-` + filesystem.id + `" class="ct-validation-wrapper replication-ct-manual-destination-${filesystem.id}">
                             <input id="input-storagepool-replication-task-dst-dataset-` + filesystem.id + `" class="form-control privileged-modal" data-field="name" data-field-type="text-input" placeholder="dataset" tabindex="2" type="text" value="${repTask && destination.dataset ? destination.dataset : ''}">
-                            <span id="help-storagepool-replication-task-dst-dataset-${filesystem.id}" class="help-block">Optional child dataset. The selected pool is added automatically.</span>
+                            <span id="help-storagepool-replication-task-dst-dataset-${filesystem.id}" class="help-block">Enter the new dataset path inside the selected pool.</span>
                         </div>
                     </div>
                     </section>
@@ -370,7 +383,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         <button id="btn-replication-task-back-${filesystem.id}" class="btn btn-default hidden" type="button">Back</button>
                         <button id="btn-replication-task-next-${filesystem.id}" class="btn btn-primary" type="button">Next</button>
                         ${filesystem.replicationtask ? `<button id="btn-storagepool-replication-task-delete-${filesystem.id}" class="btn btn-danger apply privileged-modal" tabindex="-1">Delete</button>` : ''}
-                        <button id="btn-storagepool-replication-task-configure-run-` + filesystem.id + `" class="btn btn-primary apply privileged-modal hidden" tabindex="-1">Apply configuration</button>
+                        <button id="btn-storagepool-replication-task-configure-run-` + filesystem.id + `" class="btn btn-primary apply privileged-modal hidden" tabindex="-1" type="button">Apply configuration</button>
                     </div>
                 </div>
             </div>
@@ -385,7 +398,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     let details = [error.message || String(error)];
                     if (error.problem) details.push("Problem: " + error.problem);
                     if (error.exit_status !== undefined) details.push("Exit status: " + error.exit_status);
-                    return details.filter(Boolean).join("\n");
+                    return details.filter(Boolean).join("\\n");
                 }
 
                 function replicationRefreshLogs() {
@@ -393,7 +406,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     output.text("Loading znapzend service logs...");
                     cockpit.spawn(["journalctl", "-u", "znapzend", "-n", "80", "--no-pager", "--output=short-iso"], { err: "out", superuser: "try" })
                         .then(data => output.text(data.trim() || "No znapzend service entries were found."))
-                        .catch(error => output.text("Unable to read the znapzend service log.\n" + replicationErrorText(error)));
+                        .catch(error => output.text("Unable to read the znapzend service log.\\n" + replicationErrorText(error)));
                 }
 
                 function replicationReview() {
@@ -419,11 +432,11 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         "Source: ${filesystem.name}",
                         "Recursive: " + recursive,
                         "mBuffer: " + $("#input-storagepool-replication-task-mbuffersize-${filesystem.id}").val() + $("#btnspan-storagepool-replication-task-mbuffersize-unit-${filesystem.id}").text(),
-                        "Source retention plans:\n  - " + sourcePlans.join("\n  - "),
+                        "Source retention plans:\\n  - " + sourcePlans.join("\\n  - "),
                         "Replication enabled: " + (destinationEnabled ? "Yes" : "No"),
                         "Destination: " + (destinationEnabled ? location : "Snapshots only; no replication destination"),
-                        destinationEnabled ? "Destination retention plans:\n  - " + destinationPlans.join("\n  - ") : ""
-                    ].filter(Boolean).join("\n"));
+                        destinationEnabled ? "Destination retention plans:\\n  - " + destinationPlans.join("\\n  - ") : ""
+                    ].filter(Boolean).join("\\n"));
                 }
 
                 function replicationDestinationPreview() {
@@ -477,7 +490,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     replicationRefreshLogs();
                 });
                 $("#btn-replication-task-logs-${filesystem.id}").on("click", replicationRefreshLogs);
-                $("#input-storagepool-replication-task-use-destination-${filesystem.id}, #input-storagepool-replication-task-external-${filesystem.id}, #input-storagepool-replication-task-user-${filesystem.id}, #input-storagepool-replication-task-host-${filesystem.id}, #select-storagepool-replication-task-dst-pool-${filesystem.id}, #input-storagepool-replication-task-dst-dataset-${filesystem.id}").on("input change", replicationDestinationPreview);
+                $("#input-storagepool-replication-task-use-destination-${filesystem.id}, #input-storagepool-replication-task-external-${filesystem.id}, #input-storagepool-replication-task-user-${filesystem.id}, #input-storagepool-replication-task-host-${filesystem.id}, #select-storagepool-replication-task-dst-pool-${filesystem.id}, #select-storagepool-replication-task-dst-dataset-${filesystem.id}, #input-storagepool-replication-task-dst-dataset-${filesystem.id}").on("input change", replicationDestinationPreview);
                 replicationDestinationPreview();
 
                 const replicationSourcePresets = {
@@ -610,56 +623,92 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     $(this).parent().addClass("active");
                 });
 
+                const replicationLocalDatasets = ${JSON.stringify(localDatasetNames).replace(/</g, '\\u003c')};
+
+                function replicationToggleManualDestination() {
+                    let external = $("#input-storagepool-replication-task-external-${filesystem.id}").prop("checked");
+                    let custom = $("#select-storagepool-replication-task-dst-dataset-${filesystem.id}").val() === "__custom__";
+                    $(".replication-ct-manual-destination-${filesystem.id}").toggleClass("hidden", !external && !custom);
+                    $("#label-storagepool-replication-task-dst-dataset-${filesystem.id}").text(external ? "Remote pool / dataset" : "New dataset path");
+                    $("#input-storagepool-replication-task-dst-dataset-${filesystem.id}").attr("placeholder", external ? "backup-pool/dataset" : "backups/rpool");
+                    $("#help-storagepool-replication-task-dst-dataset-${filesystem.id}").text(external
+                        ? "Enter the complete remote ZFS path. The first segment is the remote destination pool."
+                        : "Enter a path inside the selected pool. The pool name is added automatically.");
+                }
+
                 function replicationToggleExternalFields() {
                     let checked = $("#input-storagepool-replication-task-external-${filesystem.id}").prop("checked");
                     $(".external-storagepool-replication-task-item-${filesystem.id}").toggleClass("hidden", !checked);
                     $(".replication-ct-local-destination-${filesystem.id}").toggleClass("hidden", checked);
-                    $("#label-storagepool-replication-task-dst-dataset-${filesystem.id}").text(checked ? "Remote pool / dataset" : "Dataset inside destination pool");
-                    $("#input-storagepool-replication-task-dst-dataset-${filesystem.id}").attr("placeholder", checked ? "backup-pool/dataset" : "dataset");
-                    $("#help-storagepool-replication-task-dst-dataset-${filesystem.id}").text(checked
-                        ? "Enter the complete remote ZFS path. The first segment is the remote destination pool."
-                        : "Optional child dataset. The selected pool is added automatically.");
+                    replicationToggleManualDestination();
                 }
 
-                function replicationLoadLocalPools() {
-                    let select = $("#select-storagepool-replication-task-dst-pool-${filesystem.id}");
-                    let names = select.find("option").map((i, option) => option.value).get();
+                function replicationPopulateLocalDatasets(preferredDataset) {
+                    let destinationPool = $("#select-storagepool-replication-task-dst-pool-${filesystem.id}").val() || "${pool.name}";
+                    let select = $("#select-storagepool-replication-task-dst-dataset-${filesystem.id}").empty();
+                    select.append($("<option>").val(destinationPool).text(destinationPool + " — pool root"));
+                    replicationLocalDatasets.filter(name => name.startsWith(destinationPool + "/")).forEach(name => {
+                        select.append($("<option>").val(name).text(name.slice(destinationPool.length + 1)));
+                    });
+                    select.append($("<option>").val("__custom__").text("Create a new dataset…"));
 
+                    if (preferredDataset && select.find("option").filter((i, option) => option.value === preferredDataset).length) {
+                        select.val(preferredDataset);
+                    } else if (preferredDataset) {
+                        select.val("__custom__");
+                        let prefix = destinationPool + "/";
+                        $("#input-storagepool-replication-task-dst-dataset-${filesystem.id}").val(preferredDataset.startsWith(prefix) ? preferredDataset.slice(prefix.length) : preferredDataset);
+                    } else {
+                        select.val(destinationPool);
+                        $("#input-storagepool-replication-task-dst-dataset-${filesystem.id}").val("");
+                    }
+                    replicationToggleManualDestination();
+                }
+
+                function replicationInitializeLocalDestination() {
                     let configuredDataset = $("#input-storagepool-replication-task-dst-dataset-${filesystem.id}").val().trim();
                     let configuredPool = configuredDataset.split("/")[0];
-                    let external = $("#input-storagepool-replication-task-external-${filesystem.id}").prop("checked");
-                    if (!external && names.includes(configuredPool)) {
-                        select.val(configuredPool);
-                        $("#input-storagepool-replication-task-dst-dataset-${filesystem.id}").val(configuredDataset.split("/").slice(1).join("/"));
-                    } else {
-                        select.val("${pool.name}");
-                    }
+                    let poolSelect = $("#select-storagepool-replication-task-dst-pool-${filesystem.id}");
+                    let poolNames = poolSelect.find("option").map((i, option) => option.value).get();
+                    poolSelect.val(poolNames.includes(configuredPool) ? configuredPool : "${pool.name}");
+                    replicationPopulateLocalDatasets(configuredDataset || null);
                 }
 
                 function replicationDestinationDataset() {
                     let external = $("#input-storagepool-replication-task-external-${filesystem.id}").prop("checked");
-                    let dataset = $("#input-storagepool-replication-task-dst-dataset-${filesystem.id}").val().trim().replace(/^\/+|\/+$/g, "");
+                    let dataset = $("#input-storagepool-replication-task-dst-dataset-${filesystem.id}").val().trim().replace(/^\\/+|\\/+$/g, "");
                     if (external) return dataset;
                     let destinationPool = $("#select-storagepool-replication-task-dst-pool-${filesystem.id}").val() || "";
-                    return destinationPool + (dataset ? "/" + dataset : "");
+                    let selectedDataset = $("#select-storagepool-replication-task-dst-dataset-${filesystem.id}").val();
+                    if (selectedDataset === "__custom__") return dataset ? destinationPool + "/" + dataset : "";
+                    return selectedDataset || destinationPool;
                 }
 
-                $("#input-storagepool-replication-task-external-${filesystem.id}").on("input change", () => {
+                $("#input-storagepool-replication-task-external-${filesystem.id}").on("change", () => {
                     let external = $("#input-storagepool-replication-task-external-${filesystem.id}").prop("checked");
-                    let selectedPool = $("#select-storagepool-replication-task-dst-pool-${filesystem.id}").val();
-                    let datasetInput = $("#input-storagepool-replication-task-dst-dataset-${filesystem.id}");
-                    let dataset = datasetInput.val().trim().replace(/^\/+|\/+$/g, "");
-                    if (external && selectedPool && dataset !== selectedPool && !dataset.startsWith(selectedPool + "/")) {
-                        datasetInput.val(selectedPool + (dataset ? "/" + dataset : ""));
+                    if (external) {
+                        let selectedDataset = $("#select-storagepool-replication-task-dst-dataset-${filesystem.id}").val();
+                        if (selectedDataset && selectedDataset !== "__custom__") {
+                            $("#input-storagepool-replication-task-dst-dataset-${filesystem.id}").val(selectedDataset);
+                        } else {
+                            let selectedPool = $("#select-storagepool-replication-task-dst-pool-${filesystem.id}").val();
+                            let dataset = $("#input-storagepool-replication-task-dst-dataset-${filesystem.id}").val().trim().replace(/^\\/+|\\/+$/g, "");
+                            $("#input-storagepool-replication-task-dst-dataset-${filesystem.id}").val(selectedPool + (dataset ? "/" + dataset : ""));
+                        }
+                    } else {
+                        replicationInitializeLocalDestination();
                     }
                     replicationToggleExternalFields();
-                    replicationLoadLocalPools();
                     replicationDestinationPreview();
                 });
-                replicationLoadLocalPools();
-                replicationToggleExternalFields();
-                replicationDestinationPreview();
-
+                $("#select-storagepool-replication-task-dst-pool-${filesystem.id}").on("change", () => {
+                    replicationPopulateLocalDatasets(null);
+                    replicationDestinationPreview();
+                });
+                $("#select-storagepool-replication-task-dst-dataset-${filesystem.id}").on("change", () => {
+                    replicationToggleManualDestination();
+                    replicationDestinationPreview();
+                });
                 $("#input-storagepool-replication-task-use-destination-` + filesystem.id + `").on("input", () => {
                     let e = $("#input-storagepool-replication-task-use-destination-` + filesystem.id + `");
                     let checked = e.get(0).checked;
@@ -698,7 +747,10 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     if (x.match(/year/gi)) return 'y';
                 }
 
-                $("#btn-storagepool-replication-task-configure-run-${filesystem.id}").on("click", () => {
+                $("#btn-storagepool-replication-task-configure-run-${filesystem.id}").on("click", event => {
+                    event.preventDefault();
+                    $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Preparing replication configuration...");
+                    try {
                     let validationErrors = replicationValidationErrors();
                     if (validationErrors.length) {
                         $("#replication-task-validation-${filesystem.id}").removeClass("hidden").html("<strong>Correct these fields before applying:</strong><ul><li>" + validationErrors.join("</li><li>") + "</li></ul>");
@@ -788,7 +840,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     $("#spinner-storagepool-replication-task-configure-${filesystem.id}").removeClass("hidden");
                     $("#spinner-storagepool-replication-task-configure-${filesystem.id} span").text("Configuring replication task...");
                     $("#replication-task-validation-${filesystem.id}").addClass("hidden").empty();
-                    $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Running:\n" + command.join(" ") + "\n\nWaiting for znapzendzetup...");
+                    $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Running:\\n" + command.join(" ") + "\\n\\nWaiting for znapzendzetup...");
 
                     let runConfiguration = () => cockpit.spawn(command, { err: "out", superuser: "require" });
                     let removeOldDestination = ${repTask && useDst} && !useDestination;
@@ -797,18 +849,26 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         : runConfiguration();
 
                     process.then(data => {
-                        $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Configuration completed successfully.\n\nCommand:\n" + command.join(" ") + "\n\nOutput:\n" + (data || "No output."));
+                        $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Configuration completed successfully.\\n\\nCommand:\\n" + command.join(" ") + "\\n\\nOutput:\\n" + (data || "No output."));
                         FnReplicationTaskCreate({ name: '${filesystem.name}' }, { name: '${pool.name}', id: '${pool.id}' }, { tag: '${modal.tag}' });
                     });
 
                     process.fail((error, output) => {
-                        let details = [output, replicationErrorText(error)].filter(Boolean).join("\n").trim();
+                        let details = [output, replicationErrorText(error)].filter(Boolean).join("\\n").trim();
                         FnReplicationWizardShowStep("#modal-storagepool-replication-task-configure-${filesystem.id}", 4);
                         $("#spinner-storagepool-replication-task-configure-${filesystem.id}").addClass("hidden");
                         $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text("znapzend could not save this configuration. Review the detailed output below.");
-                        $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Configuration failed.\n\nCommand:\n" + command.join(" ") + "\n\nError:\n" + details);
+                        $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Configuration failed.\\n\\nCommand:\\n" + command.join(" ") + "\\n\\nError:\\n" + details);
                         FnDisplayAlert({ status: "danger", title: "Replication task could not be configured", description: "The detailed znapzend error is available in Review & Logs.", breakword: false }, { name: "replicationtask-configure" });
                     });
+                    } catch (error) {
+                        let details = replicationErrorText(error);
+                        FnReplicationWizardShowStep("#modal-storagepool-replication-task-configure-${filesystem.id}", 4);
+                        $("#spinner-storagepool-replication-task-configure-${filesystem.id}").addClass("hidden");
+                        $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text("The configuration could not be prepared. Review the technical details below.");
+                        $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Configuration preparation failed.\\n\\nError:\\n" + details);
+                        FnDisplayAlert({ status: "danger", title: "Replication task could not be prepared", description: details, breakword: true }, { name: "replicationtask-configure" });
+                    }
                 });
 
                 $("#btn-storagepool-replication-task-delete-${filesystem.id}").on("click", () => {
@@ -819,21 +879,30 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
 
                     let process = cockpit.spawn(command, { err: "out", superuser: "require" });
 
-                    $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Running:\n" + command.join(" ") + "\n\nWaiting for znapzendzetup...");
+                    $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Running:\\n" + command.join(" ") + "\\n\\nWaiting for znapzendzetup...");
 
                     process.then(data => {
                         FnReplicationTaskDelete({ name: '${filesystem.name}' }, { name: '${pool.name}', id: '${pool.id}' }, { tag: '${modal.tag}' });
                     });
 
                     process.fail((error, output) => {
-                        let details = [output, replicationErrorText(error)].filter(Boolean).join("\n").trim();
+                        let details = [output, replicationErrorText(error)].filter(Boolean).join("\\n").trim();
                         FnReplicationWizardShowStep("#modal-storagepool-replication-task-configure-${filesystem.id}", 4);
                         $("#spinner-storagepool-replication-task-configure-${filesystem.id}").addClass("hidden");
                         $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text("znapzend could not delete this configuration. Review the detailed output below.");
-                        $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Delete failed.\n\nCommand:\n" + command.join(" ") + "\n\nError:\n" + details);
+                        $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Delete failed.\\n\\nCommand:\\n" + command.join(" ") + "\\n\\nError:\\n" + details);
                         FnDisplayAlert({ status: "danger", title: "Replication task could not be deleted", description: "The detailed znapzend error is available in Review & Logs.", breakword: false }, { name: "replicationtask-delete" });
                     });
                 });
+
+                try {
+                    if (!$("#input-storagepool-replication-task-external-${filesystem.id}").prop("checked")) replicationInitializeLocalDestination();
+                    replicationToggleExternalFields();
+                    replicationDestinationPreview();
+                } catch (error) {
+                    $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text("Destination fields could not be initialized: " + replicationErrorText(error));
+                    $("#replication-task-operation-log-${filesystem.id}").text("Destination initialization failed:\\n" + replicationErrorText(error));
+                }
                 })();
             </script>
         </div>
