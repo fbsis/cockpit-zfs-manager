@@ -173,6 +173,27 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
         '/usr/bin/mbuffer',
         '/usr/local/bin/mbuffer',
     ]);
+    let serverClock = {
+        epoch: Math.floor(Date.now() / 1000),
+        offsetSeconds: -new Date().getTimezoneOffset() * 60,
+        timezone: 'server local time',
+        readAt: Date.now(),
+    };
+
+    try {
+        let clockOutput = await cockpit.spawn(['/bin/date', '+%s|%z|%Z'], { err: "out" });
+        let [epoch, offset, timezone] = clockOutput.trim().split('|');
+        if (!Number.isFinite(Number(epoch)) || !/^[+-]\d{4}$/.test(offset || '')) {
+            throw new Error('The server returned an invalid date or timezone offset.');
+        }
+        let offsetSign = offset.startsWith('-') ? -1 : 1;
+        serverClock.epoch = Number(epoch);
+        serverClock.offsetSeconds = offsetSign * (Number(offset.slice(1, 3)) * 3600 + Number(offset.slice(3, 5)) * 60);
+        serverClock.timezone = timezone || serverClock.timezone;
+        serverClock.readAt = Date.now();
+    } catch (error) {
+        // Fall back to the browser clock when the server clock cannot be read.
+    }
 
     if (filesystem.replicationtask && znapzendSetupCommand) {
         try {
@@ -454,6 +475,45 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         .catch(error => output.text("Unable to read the znapzend service log.\\n" + replicationErrorText(error)));
                 }
 
+                const replicationServerClock = ${JSON.stringify(serverClock)};
+
+                function replicationScheduleSummary() {
+                    const unitSeconds = {
+                        second: 1,
+                        minute: 60,
+                        hour: 3600,
+                        day: 86400,
+                        week: 604800,
+                        month: 2592000,
+                        year: 31557600,
+                    };
+                    let schedules = [];
+                    $('#src-storagepool-replication-task-${filesystem.id} > [data-type="src"]').each((i, el) => {
+                        let id = el.dataset.id;
+                        let value = Number($("#input-storagepool-replication-task-src-int-" + id).val());
+                        let unit = $("#btnspan-storagepool-replication-task-src-int-unit-" + id).attr("data-field-value").toLowerCase();
+                        schedules.push({ value, unit, seconds: value * unitSeconds[unit] });
+                    });
+                    schedules.sort((a, b) => a.seconds - b.seconds);
+                    let schedule = schedules[0];
+                    if (!schedule || !Number.isFinite(schedule.seconds) || schedule.seconds <= 0) {
+                        return { frequency: "Not configured", next: "Unavailable" };
+                    }
+
+                    let elapsed = (Date.now() - replicationServerClock.readAt) / 1000;
+                    let serverNow = replicationServerClock.epoch + elapsed;
+                    let adjustedNow = serverNow + replicationServerClock.offsetSeconds;
+                    let nextAdjusted = schedule.seconds * (Math.floor(adjustedNow / schedule.seconds) + 1);
+                    let nextWallClock = new Date(nextAdjusted * 1000);
+                    let pad = value => String(value).padStart(2, "0");
+                    let formatted = nextWallClock.getUTCFullYear() + "-" + pad(nextWallClock.getUTCMonth() + 1) + "-" + pad(nextWallClock.getUTCDate()) + " " + pad(nextWallClock.getUTCHours()) + ":" + pad(nextWallClock.getUTCMinutes()) + ":" + pad(nextWallClock.getUTCSeconds()) + " " + replicationServerClock.timezone;
+                    let unitLabel = schedule.unit + (schedule.value === 1 ? "" : "s");
+                    let frequency = schedule.value === 1 && schedule.unit === "day"
+                        ? "Daily at 00:00 (server local time)"
+                        : "Every " + schedule.value + " " + unitLabel + ", aligned to the server clock";
+                    return { frequency, next: formatted };
+                }
+
                 function replicationReview() {
                     let recursive = $("#input-storagepool-replication-task-recursive-${filesystem.id}").prop("checked") ? "Yes" : "No";
                     let destinationEnabled = $("#input-storagepool-replication-task-use-destination-${filesystem.id}").prop("checked");
@@ -466,17 +526,21 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     let sourcePlans = [];
                     $('#src-storagepool-replication-task-${filesystem.id} > [data-type="src"]').each((i, el) => {
                         let id = el.dataset.id;
-                        sourcePlans.push($("#input-storagepool-replication-task-src-ret-" + id).val() + " " + $("#btnspan-storagepool-replication-task-src-ret-unit-" + id).text() + " retention / every " + $("#input-storagepool-replication-task-src-int-" + id).val() + " " + $("#btnspan-storagepool-replication-task-src-int-unit-" + id).text());
+                        sourcePlans.push("Keep for " + $("#input-storagepool-replication-task-src-ret-" + id).val() + " " + $("#btnspan-storagepool-replication-task-src-ret-unit-" + id).text() + "; retain one snapshot per " + $("#input-storagepool-replication-task-src-int-" + id).val() + " " + $("#btnspan-storagepool-replication-task-src-int-unit-" + id).text() + " time slot");
                     });
                     let destinationPlans = [];
                     $('#dst-storagepool-replication-task-${filesystem.id} > [data-type="dst"]').each((i, el) => {
                         let id = el.dataset.id;
-                        destinationPlans.push($("#input-storagepool-replication-task-dst-ret-" + id).val() + " " + $("#btnspan-storagepool-replication-task-dst-ret-unit-" + id).text() + " retention / every " + $("#input-storagepool-replication-task-dst-int-" + id).val() + " " + $("#btnspan-storagepool-replication-task-dst-int-unit-" + id).text());
+                        destinationPlans.push("Keep for " + $("#input-storagepool-replication-task-dst-ret-" + id).val() + " " + $("#btnspan-storagepool-replication-task-dst-ret-unit-" + id).text() + "; retain one snapshot per " + $("#input-storagepool-replication-task-dst-int-" + id).val() + " " + $("#btnspan-storagepool-replication-task-dst-int-unit-" + id).text() + " time slot");
                     });
+                    let schedule = replicationScheduleSummary();
                     $("#replication-task-summary-${filesystem.id}").text([
                         "Source: ${filesystem.name}",
                         "Recursive: " + recursive,
                         "mBuffer: " + $("#input-storagepool-replication-task-mbuffersize-${filesystem.id}").val() + $("#btnspan-storagepool-replication-task-mbuffersize-unit-${filesystem.id}").text(),
+                        "Snapshot creation schedule: " + schedule.frequency,
+                        "Next scheduled snapshot: " + schedule.next,
+                        sourcePlans.length > 1 ? "Schedule note: snapshots use the shortest interval below; the other rules only define how history is retained." : "",
                         "Source retention plans:\\n  - " + sourcePlans.join("\\n  - "),
                         "Replication enabled: " + (destinationEnabled ? "Yes" : "No"),
                         "Destination: " + (destinationEnabled ? location : "Snapshots only; no replication destination"),
