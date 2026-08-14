@@ -415,7 +415,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         <label class="control-label replication-ct-local-destination-${filesystem.id}">Dataset inside destination pool</label>
                         <div class="ct-validation-wrapper replication-ct-local-destination-${filesystem.id}">
                             <select id="select-storagepool-replication-task-dst-dataset-${filesystem.id}" class="form-control privileged-modal"></select>
-                            <span class="help-block">Choose the pool root, an existing dataset, or “Create a new dataset”.</span>
+                            <span class="help-block">For the first replication, create a new dataset. Select an existing dataset only when it already contains a common snapshot from this source.</span>
                         </div>
                         <label id="label-storagepool-replication-task-dst-dataset-${filesystem.id}" class="control-label replication-ct-manual-destination-${filesystem.id}">New dataset path</label>
                         <div id="validationwrapper-storagepool-replication-task-` + filesystem.id + `" class="ct-validation-wrapper replication-ct-manual-destination-${filesystem.id}">
@@ -504,6 +504,21 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         if (allowMissing && (details.includes("dataset does not exist") || details.includes("cannot open") || details.includes("no datasets available"))) {
                             return [];
                         }
+                        throw error;
+                    }
+                }
+
+                async function replicationDatasetExists(dataset, external, user, host) {
+                    let zfsArguments = ['list', '-H', '-o', 'name', dataset];
+                    let command = external
+                        ? ['/usr/bin/ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', user + '@' + host, 'zfs'].concat(zfsArguments)
+                        : ['/sbin/zfs'].concat(zfsArguments);
+                    try {
+                        await replicationSpawn(command, { err: "out", superuser: "require" });
+                        return true;
+                    } catch (error) {
+                        let details = replicationErrorText(error).toLowerCase();
+                        if (details.includes("dataset does not exist") || details.includes("cannot open") || details.includes("does not exist")) return false;
                         throw error;
                     }
                 }
@@ -1022,20 +1037,24 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                                 let runFailure = null;
                                 try {
                                     let snapshotsBefore = await replicationReadSnapshots('${filesystem.name}', false, "", "", false);
-                                    let destinationSnapshotsBefore = useDestination
-                                        ? await replicationReadSnapshots(dstDataset, external, externalUser, externalHost, createDestinationDataset)
+                                    let destinationExists = useDestination
+                                        ? await replicationDatasetExists(dstDataset, external, externalUser, externalHost)
+                                        : false;
+                                    let destinationSnapshotsBefore = useDestination && destinationExists
+                                        ? await replicationReadSnapshots(dstDataset, external, externalUser, externalHost, false)
                                         : [];
                                     if (useDestination) {
                                         let sourceExistingSuffixes = new Set(replicationDatasetSnapshotSuffixes(snapshotsBefore, '${filesystem.name}'));
                                         let destinationExistingSuffixes = replicationDatasetSnapshotSuffixes(destinationSnapshotsBefore, dstDataset);
                                         let hasCommonSnapshot = destinationExistingSuffixes.some(suffix => sourceExistingSuffixes.has(suffix));
-                                        if (destinationExistingSuffixes.length && !hasCommonSnapshot) {
-                                            let historyError = new Error("Destination " + dstLocation + " already contains snapshots, but none is shared with ${filesystem.name}. znapzend stopped to protect the existing destination history.");
-                                            historyError.commandOutput = "Select a new empty destination dataset (recommended), or preserve and clean the existing destination manually before retrying.";
+                                        if (destinationExists && !hasCommonSnapshot) {
+                                            let historyError = new Error("Destination dataset " + dstLocation + " already exists, but it has no common snapshot with ${filesystem.name}. A full initial ZFS receive must create a new dataset.");
+                                            historyError.commandOutput = "Choose Create a new dataset and enter a path that does not exist yet, such as apps-backup-v2. The existing destination will not be modified.";
                                             throw historyError;
                                         }
                                     }
-                                    result.runOutput = await replicationSpawn([${JSON.stringify(znapzendCommand || 'znapzend')}, '--nodelay', '--runonce=${filesystem.name}'], { err: "out", superuser: "require" });
+                                    let runCommand = [${JSON.stringify(znapzendCommand || 'znapzend')}, '--nodelay', useDestination ? '--features=recvu' : null, '--runonce=${filesystem.name}'].filter(Boolean);
+                                    result.runOutput = await replicationSpawn(runCommand, { err: "out", superuser: "require" });
                                     let snapshotsAfter = await replicationReadSnapshots('${filesystem.name}', false, "", "", false);
                                     let existingSnapshots = new Set(snapshotsBefore);
                                     result.createdSnapshots = snapshotsAfter.filter(name => !existingSnapshots.has(name));
