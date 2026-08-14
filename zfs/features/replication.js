@@ -482,6 +482,32 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     return String(output || "").split("\\n").map(name => name.trim()).filter(Boolean);
                 }
 
+                function replicationSnapshotSuffix(name) {
+                    let separator = name.indexOf("@");
+                    return separator >= 0 ? name.slice(separator + 1) : "";
+                }
+
+                function replicationDatasetSnapshotSuffixes(snapshotNames, dataset) {
+                    let prefix = dataset + "@";
+                    return snapshotNames.filter(name => name.startsWith(prefix)).map(replicationSnapshotSuffix).filter(Boolean);
+                }
+
+                async function replicationReadSnapshots(dataset, external, user, host, allowMissing) {
+                    let zfsArguments = ['list', '-H', '-t', 'snapshot', '-r', dataset, '-o', 'name', '-s', 'creation'];
+                    let command = external
+                        ? ['/usr/bin/ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', user + '@' + host, 'zfs'].concat(zfsArguments)
+                        : ['/sbin/zfs'].concat(zfsArguments);
+                    try {
+                        return replicationSnapshotNames(await replicationSpawn(command, { err: "out", superuser: "require" }));
+                    } catch (error) {
+                        let details = replicationErrorText(error).toLowerCase();
+                        if (allowMissing && (details.includes("dataset does not exist") || details.includes("cannot open") || details.includes("no datasets available"))) {
+                            return [];
+                        }
+                        throw error;
+                    }
+                }
+
                 function replicationRefreshLogs() {
                     let output = $("#replication-task-logs-${filesystem.id}");
                     output.text("Loading znapzend service logs...");
@@ -602,6 +628,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         if (Number($("#input-storagepool-replication-task-src-ret-" + id).val()) <= 0 || Number($("#input-storagepool-replication-task-src-int-" + id).val()) <= 0) errors.push("Source retention and interval values must be greater than zero.");
                     });
                     if (destinationEnabled && !replicationDestinationDataset()) errors.push("Select the destination pool / dataset.");
+                    if (destinationEnabled && replicationDestinationDataset() && !/^[A-Za-z0-9_.:-]+(?:\\/[A-Za-z0-9_.:-]+)*$/.test(replicationDestinationDataset())) errors.push("Destination dataset contains unsupported characters.");
                     if (destinationEnabled && !destinationPlans.length) errors.push("Add at least one destination retention plan.");
                     if (destinationEnabled) destinationPlans.each((i, el) => {
                         let id = el.dataset.id;
@@ -609,6 +636,9 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     });
                     if (destinationEnabled && external && !$("#input-storagepool-replication-task-user-${filesystem.id}").val().trim()) errors.push("Enter the SSH user for the external destination.");
                     if (destinationEnabled && external && !$("#input-storagepool-replication-task-host-${filesystem.id}").val().trim()) errors.push("Enter the host for the external destination.");
+                    if (destinationEnabled && external && !/^[A-Za-z0-9._-]+$/.test($("#input-storagepool-replication-task-user-${filesystem.id}").val().trim())) errors.push("SSH user contains unsupported characters.");
+                    if (destinationEnabled && external && !/^[A-Za-z0-9._:\\[\\]-]+$/.test($("#input-storagepool-replication-task-host-${filesystem.id}").val().trim())) errors.push("Remote host contains unsupported characters.");
+                    if (destinationEnabled && !external && replicationDestinationDataset() === "${filesystem.name}") errors.push("Source and destination datasets must be different.");
                     return errors;
                 }
 
@@ -979,7 +1009,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                             await destinationSetup;
                             await replicationSpawn(['/usr/bin/systemctl', 'reset-failed', 'znapzend.service'], { err: "out", superuser: "require" });
 
-                            let result = { serviceOutput: "", runOutput: null, createdSnapshots: [] };
+                            let result = { serviceOutput: "", runOutput: null, createdSnapshots: [], replicatedSnapshots: [] };
                             if (!runNow) {
                                 result.serviceOutput = await replicationSpawn(['/usr/bin/systemctl', 'restart', 'znapzend.service'], { err: "out", superuser: "require" });
                             } else {
@@ -991,15 +1021,39 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
 
                                 let runFailure = null;
                                 try {
-                                    let snapshotsBefore = replicationSnapshotNames(await replicationSpawn(['/sbin/zfs', 'list', '-H', '-t', 'snapshot', '-r', '${filesystem.name}', '-o', 'name', '-s', 'creation'], { err: "out", superuser: "require" }));
+                                    let snapshotsBefore = await replicationReadSnapshots('${filesystem.name}', false, "", "", false);
+                                    let destinationSnapshotsBefore = useDestination
+                                        ? await replicationReadSnapshots(dstDataset, external, externalUser, externalHost, createDestinationDataset)
+                                        : [];
+                                    if (useDestination) {
+                                        let sourceExistingSuffixes = new Set(replicationDatasetSnapshotSuffixes(snapshotsBefore, '${filesystem.name}'));
+                                        let destinationExistingSuffixes = replicationDatasetSnapshotSuffixes(destinationSnapshotsBefore, dstDataset);
+                                        let hasCommonSnapshot = destinationExistingSuffixes.some(suffix => sourceExistingSuffixes.has(suffix));
+                                        if (destinationExistingSuffixes.length && !hasCommonSnapshot) {
+                                            let historyError = new Error("Destination " + dstLocation + " already contains snapshots, but none is shared with ${filesystem.name}. znapzend stopped to protect the existing destination history.");
+                                            historyError.commandOutput = "Select a new empty destination dataset (recommended), or preserve and clean the existing destination manually before retrying.";
+                                            throw historyError;
+                                        }
+                                    }
                                     result.runOutput = await replicationSpawn([${JSON.stringify(znapzendCommand || 'znapzend')}, '--nodelay', '--runonce=${filesystem.name}'], { err: "out", superuser: "require" });
-                                    let snapshotsAfter = replicationSnapshotNames(await replicationSpawn(['/sbin/zfs', 'list', '-H', '-t', 'snapshot', '-r', '${filesystem.name}', '-o', 'name', '-s', 'creation'], { err: "out", superuser: "require" }));
+                                    let snapshotsAfter = await replicationReadSnapshots('${filesystem.name}', false, "", "", false);
                                     let existingSnapshots = new Set(snapshotsBefore);
                                     result.createdSnapshots = snapshotsAfter.filter(name => !existingSnapshots.has(name));
                                     if (!result.createdSnapshots.length) {
                                         let verificationError = new Error("znapzend finished, but ZFS did not report a new snapshot for ${filesystem.name}.");
                                         verificationError.commandOutput = result.runOutput || "No output was returned by znapzend.";
                                         throw verificationError;
+                                    }
+                                    if (useDestination) {
+                                        let destinationSnapshotsAfter = await replicationReadSnapshots(dstDataset, external, externalUser, externalHost, false);
+                                        let existingDestinationSnapshots = new Set(destinationSnapshotsBefore);
+                                        let sourceSuffixes = new Set(replicationDatasetSnapshotSuffixes(result.createdSnapshots, '${filesystem.name}'));
+                                        result.replicatedSnapshots = destinationSnapshotsAfter.filter(name => name.startsWith(dstDataset + "@") && !existingDestinationSnapshots.has(name) && sourceSuffixes.has(replicationSnapshotSuffix(name)));
+                                        if (!result.replicatedSnapshots.length) {
+                                            let replicationError = new Error("The source snapshot was created, but no matching snapshot appeared at destination " + dstLocation + ".");
+                                            replicationError.commandOutput = result.runOutput || "No output was returned by znapzend.";
+                                            throw replicationError;
+                                        }
                                     }
                                 } catch (error) {
                                     runFailure = error;
@@ -1019,14 +1073,18 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                             }
 
                             let finalLog = configurationLog + "\\n\\nDestination auto-creation: " + (createDestinationDataset ? "Enabled" : "Not required") + "\\nService: znapzend.service started successfully.\\n" + result.serviceOutput;
-                            if (result.runOutput !== null) finalLog += "\\n\\nRun now completed and verified for ${filesystem.name}.\\nCreated snapshot(s):\\n  - " + result.createdSnapshots.join("\\n  - ") + "\\n\\nznapzend output:\\n" + (result.runOutput || "No output.");
+                            if (result.runOutput !== null) {
+                                finalLog += "\\n\\nRun now completed and verified for ${filesystem.name}.\\nSource snapshot(s):\\n  - " + result.createdSnapshots.join("\\n  - ");
+                                if (useDestination) finalLog += "\\nReplicated snapshot(s) at " + dstLocation + ":\\n  - " + result.replicatedSnapshots.join("\\n  - ");
+                                finalLog += "\\n\\nznapzend output:\\n" + (result.runOutput || "No output.");
+                            }
                             $("#replication-task-operation-log-${filesystem.id}").text(finalLog);
-                            FnReplicationTaskCreate({ name: '${filesystem.name}' }, { name: '${pool.name}', id: '${pool.id}' }, { tag: '${modal.tag}' }, { runNow: runNow, createdSnapshots: result.createdSnapshots });
+                            FnReplicationTaskCreate({ name: '${filesystem.name}' }, { name: '${pool.name}', id: '${pool.id}' }, { tag: '${modal.tag}' }, { runNow: runNow, createdSnapshots: result.createdSnapshots, destination: useDestination ? dstLocation : "", replicatedSnapshots: result.replicatedSnapshots });
                         } catch (error) {
                             let details = replicationErrorText(error);
                             if (error.serviceStartError) details += "\\nThe scheduler could not be restored:\\n" + error.serviceStartError;
                             $("#spinner-storagepool-replication-task-configure-${filesystem.id}").addClass("hidden");
-                            let phaseMessage = postApplyPhase === "run" ? "The task was saved, but the immediate run did not create a verifiable snapshot." : "The task was saved, but the znapzend service could not be started automatically.";
+                            let phaseMessage = postApplyPhase === "run" ? "The task was saved, but the immediate snapshot and replication could not be fully verified." : "The task was saved, but the znapzend service could not be started automatically.";
                             $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text(phaseMessage);
                             $("#replication-task-operation-log-${filesystem.id}").text(configurationLog + "\\n\\n" + (postApplyPhase === "run" ? "Run now failed" : "Service start failed") + ":\\n" + details);
                             FnDisplayAlert({ status: "warning", title: postApplyPhase === "run" ? "Replication task saved; run now failed" : "Replication task saved; service not started", description: details, breakword: true }, { name: "replicationtask-configure" });
@@ -1098,7 +1156,12 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
 function FnReplicationTaskCreate(filesystem, pool, modal, result) {
     let runCompleted = result?.runNow && result.createdSnapshots?.length;
     let title = runCompleted ? "Replication completed" : "Replication task configured";
-    let description = runCompleted ? "Created: " + result.createdSnapshots.join(", ") : filesystem.name;
+    let description = filesystem.name;
+    if (runCompleted && result.destination) {
+        description = "Created " + result.createdSnapshots.length + " source snapshot(s) and verified " + result.replicatedSnapshots.length + " at " + result.destination + ".";
+    } else if (runCompleted) {
+        description = "Created: " + result.createdSnapshots.join(", ");
+    }
     FnDisplayAlert({ status: "success", title: title, description: description, breakword: false }, { name: "replicationtask-configure" });
 
     setTimeout(() => {
