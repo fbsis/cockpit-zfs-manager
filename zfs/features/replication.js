@@ -462,9 +462,24 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     if (!error) return "Unknown error returned by znapzend.";
                     if (error.problem === "not-found") return "The replication executable could not be started. Verify that znapzendzetup and mbuffer are installed and executable.";
                     let details = [error.message || String(error)];
+                    if (error.commandOutput) details.push(error.commandOutput);
                     if (error.problem) details.push("Problem: " + error.problem);
                     if (error.exit_status !== undefined) details.push("Exit status: " + error.exit_status);
                     return details.filter(Boolean).join("\\n");
+                }
+
+                function replicationSpawn(command, options) {
+                    return new Promise((resolve, reject) => {
+                        cockpit.spawn(command, options).done(resolve).fail((error, output) => {
+                            let failure = error || new Error(output || "Command failed without an error message.");
+                            if (output) failure.commandOutput = output;
+                            reject(failure);
+                        });
+                    });
+                }
+
+                function replicationSnapshotNames(output) {
+                    return String(output || "").split("\\n").map(name => name.trim()).filter(Boolean);
                 }
 
                 function replicationRefreshLogs() {
@@ -951,40 +966,71 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         ? cockpit.spawn([${JSON.stringify(znapzendSetupCommand || 'znapzendzetup')}, 'delete', '--dst=a', '${filesystem.name}'], { err: "out", superuser: "require" }).then(runConfiguration)
                         : runConfiguration();
 
-                    process.then(data => {
+                    process.then(async data => {
                         let configurationLog = "[" + new Date().toLocaleString() + "] Configuration completed successfully.\\n\\nCommand:\\n" + command.join(" ") + "\\n\\nOutput:\\n" + (data || "No output.");
                         let postApplyPhase = "service";
                         $("#replication-task-operation-log-${filesystem.id}").text(configurationLog + "\\n\\nStarting znapzend service...");
 
                         let destinationSetup = createDestinationDataset
-                            ? cockpit.spawn([${JSON.stringify(znapzendSetupCommand || 'znapzendzetup')}, 'enable-dst-autocreation', '${filesystem.name}', 'a'], { err: "out", superuser: "require" })
+                            ? replicationSpawn([${JSON.stringify(znapzendSetupCommand || 'znapzendzetup')}, 'enable-dst-autocreation', '${filesystem.name}', 'a'], { err: "out", superuser: "require" })
                             : Promise.resolve("");
 
-                        destinationSetup
-                            .then(() => cockpit.spawn(['/usr/bin/systemctl', 'reset-failed', 'znapzend.service'], { err: "out", superuser: "require" }))
-                            .then(() => cockpit.spawn(['/usr/bin/systemctl', 'restart', 'znapzend.service'], { err: "out", superuser: "require" }))
-                            .then(serviceOutput => {
-                                if (!runNow) return { serviceOutput: serviceOutput || "", runOutput: null };
+                        try {
+                            await destinationSetup;
+                            await replicationSpawn(['/usr/bin/systemctl', 'reset-failed', 'znapzend.service'], { err: "out", superuser: "require" });
+
+                            let result = { serviceOutput: "", runOutput: null, createdSnapshots: [] };
+                            if (!runNow) {
+                                result.serviceOutput = await replicationSpawn(['/usr/bin/systemctl', 'restart', 'znapzend.service'], { err: "out", superuser: "require" });
+                            } else {
                                 postApplyPhase = "run";
                                 $("#spinner-storagepool-replication-task-configure-${filesystem.id} span").text("Running replication now...");
-                                $("#replication-task-operation-log-${filesystem.id}").text(configurationLog + "\\n\\nService started. Running '${filesystem.name}' now...");
-                                return cockpit.spawn([${JSON.stringify(znapzendCommand || 'znapzend')}, '--nodelay', '--runonce=${filesystem.name}'], { err: "out", superuser: "require" })
-                                    .then(runOutput => ({ serviceOutput: serviceOutput || "", runOutput: runOutput || "No output." }));
-                            })
-                            .then(result => {
-                                let finalLog = configurationLog + "\\n\\nDestination auto-creation: " + (createDestinationDataset ? "Enabled" : "Not required") + "\\nService: znapzend.service started successfully.\\n" + result.serviceOutput;
-                                if (result.runOutput !== null) finalLog += "\\n\\nRun now completed for ${filesystem.name}:\\n" + result.runOutput;
-                                $("#replication-task-operation-log-${filesystem.id}").text(finalLog);
-                                FnReplicationTaskCreate({ name: '${filesystem.name}' }, { name: '${pool.name}', id: '${pool.id}' }, { tag: '${modal.tag}' });
-                            })
-                            .catch(error => {
-                                let details = replicationErrorText(error);
-                                $("#spinner-storagepool-replication-task-configure-${filesystem.id}").addClass("hidden");
-                                let phaseMessage = postApplyPhase === "run" ? "The task was saved and the service was started, but the immediate run failed." : "The task was saved, but the znapzend service could not be started automatically.";
-                                $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text(phaseMessage);
-                                $("#replication-task-operation-log-${filesystem.id}").text(configurationLog + "\\n\\n" + (postApplyPhase === "run" ? "Run now failed" : "Service start failed") + ":\\n" + details);
-                                FnDisplayAlert({ status: "warning", title: postApplyPhase === "run" ? "Replication task saved; run now failed" : "Replication task saved; service not started", description: details, breakword: true }, { name: "replicationtask-configure" });
-                            });
+                                $("#replication-task-operation-log-${filesystem.id}").text(configurationLog + "\\n\\nStopping the scheduler temporarily, then running '${filesystem.name}' now...");
+
+                                await replicationSpawn(['/usr/bin/systemctl', 'stop', 'znapzend.service'], { err: "out", superuser: "require" });
+
+                                let runFailure = null;
+                                try {
+                                    let snapshotsBefore = replicationSnapshotNames(await replicationSpawn(['/sbin/zfs', 'list', '-H', '-t', 'snapshot', '-r', '${filesystem.name}', '-o', 'name', '-s', 'creation'], { err: "out", superuser: "require" }));
+                                    result.runOutput = await replicationSpawn([${JSON.stringify(znapzendCommand || 'znapzend')}, '--nodelay', '--runonce=${filesystem.name}'], { err: "out", superuser: "require" });
+                                    let snapshotsAfter = replicationSnapshotNames(await replicationSpawn(['/sbin/zfs', 'list', '-H', '-t', 'snapshot', '-r', '${filesystem.name}', '-o', 'name', '-s', 'creation'], { err: "out", superuser: "require" }));
+                                    let existingSnapshots = new Set(snapshotsBefore);
+                                    result.createdSnapshots = snapshotsAfter.filter(name => !existingSnapshots.has(name));
+                                    if (!result.createdSnapshots.length) {
+                                        let verificationError = new Error("znapzend finished, but ZFS did not report a new snapshot for ${filesystem.name}.");
+                                        verificationError.commandOutput = result.runOutput || "No output was returned by znapzend.";
+                                        throw verificationError;
+                                    }
+                                } catch (error) {
+                                    runFailure = error;
+                                }
+
+                                try {
+                                    result.serviceOutput = await replicationSpawn(['/usr/bin/systemctl', 'start', 'znapzend.service'], { err: "out", superuser: "require" });
+                                } catch (serviceError) {
+                                    if (runFailure) {
+                                        runFailure.serviceStartError = replicationErrorText(serviceError);
+                                    } else {
+                                        postApplyPhase = "service";
+                                        throw serviceError;
+                                    }
+                                }
+                                if (runFailure) throw runFailure;
+                            }
+
+                            let finalLog = configurationLog + "\\n\\nDestination auto-creation: " + (createDestinationDataset ? "Enabled" : "Not required") + "\\nService: znapzend.service started successfully.\\n" + result.serviceOutput;
+                            if (result.runOutput !== null) finalLog += "\\n\\nRun now completed and verified for ${filesystem.name}.\\nCreated snapshot(s):\\n  - " + result.createdSnapshots.join("\\n  - ") + "\\n\\nznapzend output:\\n" + (result.runOutput || "No output.");
+                            $("#replication-task-operation-log-${filesystem.id}").text(finalLog);
+                            FnReplicationTaskCreate({ name: '${filesystem.name}' }, { name: '${pool.name}', id: '${pool.id}' }, { tag: '${modal.tag}' }, { runNow: runNow, createdSnapshots: result.createdSnapshots });
+                        } catch (error) {
+                            let details = replicationErrorText(error);
+                            if (error.serviceStartError) details += "\\nThe scheduler could not be restored:\\n" + error.serviceStartError;
+                            $("#spinner-storagepool-replication-task-configure-${filesystem.id}").addClass("hidden");
+                            let phaseMessage = postApplyPhase === "run" ? "The task was saved, but the immediate run did not create a verifiable snapshot." : "The task was saved, but the znapzend service could not be started automatically.";
+                            $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text(phaseMessage);
+                            $("#replication-task-operation-log-${filesystem.id}").text(configurationLog + "\\n\\n" + (postApplyPhase === "run" ? "Run now failed" : "Service start failed") + ":\\n" + details);
+                            FnDisplayAlert({ status: "warning", title: postApplyPhase === "run" ? "Replication task saved; run now failed" : "Replication task saved; service not started", description: details, breakword: true }, { name: "replicationtask-configure" });
+                        }
                     });
 
                     process.fail((error, output) => {
@@ -1049,8 +1095,11 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
     }
 }
 
-function FnReplicationTaskCreate(filesystem, pool, modal) {
-    FnDisplayAlert({ status: "success", title: "Replication task configured", description: filesystem.name, breakword: false }, { name: "replicationtask-configure" });
+function FnReplicationTaskCreate(filesystem, pool, modal, result) {
+    let runCompleted = result?.runNow && result.createdSnapshots?.length;
+    let title = runCompleted ? "Replication completed" : "Replication task configured";
+    let description = runCompleted ? "Created: " + result.createdSnapshots.join(", ") : filesystem.name;
+    FnDisplayAlert({ status: "success", title: title, description: description, breakword: false }, { name: "replicationtask-configure" });
 
     setTimeout(() => {
         $(modal.tag).modal('hide');
