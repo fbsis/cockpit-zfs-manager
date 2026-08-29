@@ -186,6 +186,24 @@
     justify-content: space-between;
 }
 
+.replication-ct-job-status {
+    margin-bottom: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid var(--pf-global--BorderColor--100);
+    border-left: 3px solid var(--pf-global--info-color--100, var(--pf-global--primary-color--100));
+    background: var(--pf-global--BackgroundColor--150);
+    white-space: pre-wrap;
+}
+
+.replication-ct-job-status[data-status="succeeded"] {
+    border-left-color: var(--pf-global--success-color--100);
+}
+
+.replication-ct-job-status[data-status="failed"],
+.replication-ct-job-status[data-status="interrupted"] {
+    border-left-color: var(--pf-global--danger-color--100);
+}
+
 .replication-ct-log {
     max-height: 15rem;
     padding: 0.75rem;

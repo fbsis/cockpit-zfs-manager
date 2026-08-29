@@ -122,6 +122,18 @@ async function replicationFindExecutable(name, candidates) {
     return null;
 }
 
+async function replicationFindTrustedExecutable(candidates) {
+    for (const candidate of candidates) {
+        try {
+            let detected = await cockpit.spawn(['/bin/sh', '-c', 'test -x "$1" && printf "%s" "$1"', 'cockpit-zfs-manager', candidate], { err: "out", superuser: "try" });
+            if (detected.trim()) return detected.trim();
+        } catch (error) {
+            // Continue checking only the package-owned absolute paths.
+        }
+    }
+    return null;
+}
+
 function FnModalReplicationTaskCreate(pool, filesystem) {
     let modal = {
         window: ""
@@ -172,6 +184,14 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
     let mbufferCommand = await replicationFindExecutable('mbuffer', [
         '/usr/bin/mbuffer',
         '/usr/local/bin/mbuffer',
+    ]);
+    let systemdRunCommand = await replicationFindExecutable('systemd-run', [
+        '/usr/bin/systemd-run',
+        '/bin/systemd-run',
+    ]);
+    let replicationJobHelper = await replicationFindTrustedExecutable([
+        '/usr/share/cockpit/zfs/helpers/run-replication-job',
+        '/usr/local/share/cockpit/zfs/helpers/run-replication-job',
     ]);
     let serverClock = {
         epoch: Math.floor(Date.now() / 1000),
@@ -257,6 +277,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     <h4 class="modal-title">Configure Replication Task</h4>
                 </div>
                 <div class="modal-body">
+                    <div id="replication-task-background-banner-${filesystem.id}" class="alert alert-info hidden" role="status"></div>
                     <ol class="replication-ct-steps" aria-label="Replication configuration steps">
                         <li class="active" data-step="1"><span>1</span>Source</li>
                         <li data-step="2"><span>2</span>Retention</li>
@@ -431,6 +452,12 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         <h5>Configuration activity</h5>
                         <pre id="replication-task-operation-log-${filesystem.id}" class="replication-ct-log">No configuration attempt has been made in this session.</pre>
                         <div class="replication-ct-log-heading">
+                            <h5>Background run</h5>
+                            <button id="btn-replication-task-job-status-${filesystem.id}" class="btn btn-default" type="button">Refresh status</button>
+                        </div>
+                        <div id="replication-task-job-status-${filesystem.id}" class="replication-ct-job-status">No background run has been recorded for this dataset.</div>
+                        <pre id="replication-task-job-logs-${filesystem.id}" class="replication-ct-log">Background job logs will appear here.</pre>
+                        <div class="replication-ct-log-heading">
                             <h5>znapzend service logs</h5>
                             <button id="btn-replication-task-logs-${filesystem.id}" class="btn btn-default" type="button">Refresh logs</button>
                         </div>
@@ -478,6 +505,154 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     });
                 }
 
+                const replicationJobSource = ${JSON.stringify(filesystem.name)};
+                let replicationJobStatusTimer = null;
+                let replicationJobLaunchPendingUntil = 0;
+
+                function replicationJobHash(value) {
+                    let hash = 2166136261;
+                    for (let index = 0; index < value.length; index++) {
+                        hash ^= value.charCodeAt(index);
+                        hash = Math.imul(hash, 16777619);
+                    }
+                    return (hash >>> 0).toString(16).padStart(8, "0");
+                }
+
+                function replicationJobId() {
+                    let slug = replicationJobSource.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 36) || "dataset";
+                    return slug + "-" + replicationJobHash(replicationJobSource);
+                }
+
+                function replicationJobStatePath() {
+                    return "/var/lib/cockpit-zfs-manager/replication-jobs/" + replicationJobId() + ".state";
+                }
+
+                function replicationParseProperties(output) {
+                    return String(output || "").split("\\n").reduce((properties, line) => {
+                        let separator = line.indexOf("=");
+                        if (separator > 0) properties[line.slice(0, separator)] = line.slice(separator + 1);
+                        return properties;
+                    }, {});
+                }
+
+                function replicationJobPhaseLabel(phase) {
+                    return ({
+                        "waiting-for-lock": "Waiting for another replication job",
+                        "stopping-scheduler": "Stopping the scheduler",
+                        "removing-incomplete-destination": "Removing the confirmed incomplete destination",
+                        "replicating": "Creating and replicating the snapshot",
+                        "verifying": "Verifying source and destination snapshots",
+                        "restoring-scheduler": "Restarting the scheduler",
+                        "completed": "Completed",
+                        "failed": "Failed",
+                        "lock-failed": "Could not acquire the replication lock",
+                        "scheduler-stop-failed": "Could not stop the scheduler",
+                        "scheduler-restore-failed": "Replication ended, but the scheduler could not be restarted",
+                        "replication-failed": "znapzend reported a replication failure",
+                        "source-snapshot-read-failed": "Could not read source snapshots",
+                        "source-verification-failed": "No new source snapshot could be verified",
+                        "destination-verification-failed": "No matching destination snapshot could be verified",
+                        "destination-reset-failed": "Could not remove the confirmed incomplete destination"
+                    })[phase] || phase || "Unknown";
+                }
+
+                function replicationJobDate(epoch) {
+                    let value = Number(epoch);
+                    return Number.isFinite(value) && value > 0 ? new Date(value * 1000).toLocaleString() : "—";
+                }
+
+                async function replicationRefreshJobStatus() {
+                    let statusElement = $("#replication-task-job-status-${filesystem.id}");
+                    let logElement = $("#replication-task-job-logs-${filesystem.id}");
+                    let banner = $("#replication-task-background-banner-${filesystem.id}");
+                    let state;
+
+                    if (replicationJobStatusTimer) {
+                        clearTimeout(replicationJobStatusTimer);
+                        replicationJobStatusTimer = null;
+                    }
+
+                    try {
+                        let stateOutput = await replicationSpawn(['/usr/bin/cat', replicationJobStatePath()], { err: "out", superuser: "require" });
+                        state = replicationParseProperties(stateOutput);
+                    } catch (error) {
+                        if (Date.now() < replicationJobLaunchPendingUntil) {
+                            statusElement.attr("data-status", "queued").text("Status: Starting background job...");
+                            logElement.text("Waiting for the background unit to write its initial state...");
+                            banner.removeClass("hidden alert-success alert-danger alert-warning").addClass("alert-info").text("Replication is starting in the background. You may close or reload this page safely.");
+                            $("#btn-storagepool-replication-task-configure-run-${filesystem.id}, #btn-storagepool-replication-task-apply-run-now-${filesystem.id}, #btn-storagepool-replication-task-delete-${filesystem.id}").prop("disabled", true);
+                            replicationJobStatusTimer = setTimeout(replicationRefreshJobStatus, 1000);
+                            return { state: {}, displayedStatus: "queued", unitState: {} };
+                        }
+                        statusElement.removeAttr("data-status").text("No background run has been recorded for this dataset.");
+                        logElement.text("Background job logs will appear here.");
+                        banner.addClass("hidden").empty();
+                        $("#btn-storagepool-replication-task-configure-run-${filesystem.id}, #btn-storagepool-replication-task-apply-run-now-${filesystem.id}, #btn-storagepool-replication-task-delete-${filesystem.id}").prop("disabled", false);
+                        return null;
+                    }
+
+                    let displayedStatus = state.status || "unknown";
+                    let unitState = {};
+                    if ((displayedStatus === "queued" || displayedStatus === "running") && state.unit) {
+                        try {
+                            let unitOutput = await replicationSpawn([
+                                '/usr/bin/systemctl', 'show', state.unit,
+                                '--property=LoadState,ActiveState,SubState,Result,ExecMainStatus'
+                            ], { err: "out", superuser: "require" });
+                            unitState = replicationParseProperties(unitOutput);
+                        } catch (error) {
+                            unitState = { LoadState: "not-found", ActiveState: "inactive" };
+                        }
+
+                        let stillActive = unitState.ActiveState === "active" || unitState.ActiveState === "activating" || unitState.ActiveState === "reloading";
+                        let stateAge = Math.floor(Date.now() / 1000) - Number(state.started_at || 0);
+                        if (!stillActive && stateAge > 10) displayedStatus = "interrupted";
+                    }
+
+                    let statusLabel = ({
+                        queued: "Queued",
+                        running: "Running in background",
+                        succeeded: "Completed successfully",
+                        failed: "Failed",
+                        interrupted: "Interrupted before completion"
+                    })[displayedStatus] || displayedStatus;
+                    let details = [
+                        "Status: " + statusLabel,
+                        "Phase: " + replicationJobPhaseLabel(state.phase),
+                        "Started: " + replicationJobDate(state.started_at),
+                        "Finished: " + replicationJobDate(state.finished_at),
+                        "Systemd unit: " + (state.unit || "—")
+                    ];
+                    if (state.destination_enabled === "1") details.push("Destination: " + (state.destination || "—"));
+                    if (state.exit_code) details.push("Exit status: " + state.exit_code);
+                    statusElement.attr("data-status", displayedStatus).text(details.join("\\n"));
+                    let jobActive = displayedStatus === "queued" || displayedStatus === "running";
+                    $("#btn-storagepool-replication-task-configure-run-${filesystem.id}, #btn-storagepool-replication-task-apply-run-now-${filesystem.id}, #btn-storagepool-replication-task-delete-${filesystem.id}").prop("disabled", jobActive);
+
+                    banner.removeClass("hidden alert-info alert-success alert-danger alert-warning");
+                    if (jobActive) {
+                        banner.addClass("alert-info").text("Replication is running in the background. You may close or reload this page safely.");
+                    } else if (displayedStatus === "succeeded") {
+                        banner.addClass("alert-success").text("The latest background replication completed successfully.");
+                    } else {
+                        banner.addClass(displayedStatus === "interrupted" ? "alert-warning" : "alert-danger").text("The latest background replication did not complete. Review its log below.");
+                    }
+
+                    if (state.unit) {
+                        try {
+                            let jobLog = await replicationSpawn(['journalctl', '-u', state.unit, '-n', '120', '--no-pager', '--output=short-iso'], { err: "out", superuser: "try" });
+                            logElement.text(jobLog.trim() || "No journal entries are available for this job yet.");
+                        } catch (error) {
+                            logElement.text("Unable to read the background job log.\\n" + replicationErrorText(error));
+                        }
+                    }
+
+                    if (displayedStatus === "queued" || displayedStatus === "running") {
+                        replicationJobStatusTimer = setTimeout(replicationRefreshJobStatus, 2000);
+                    }
+                    return { state, displayedStatus, unitState };
+                }
+
                 function replicationSnapshotNames(output) {
                     return String(output || "").split("\\n").map(name => name.trim()).filter(Boolean);
                 }
@@ -521,6 +696,14 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         if (details.includes("dataset does not exist") || details.includes("cannot open") || details.includes("does not exist")) return false;
                         throw error;
                     }
+                }
+
+                async function replicationReadDatasets(dataset, external, user, host) {
+                    let zfsArguments = ['list', '-H', '-r', '-o', 'name', '-t', 'filesystem', dataset];
+                    let command = external
+                        ? ['/usr/bin/ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', user + '@' + host, 'zfs'].concat(zfsArguments)
+                        : ['/sbin/zfs'].concat(zfsArguments);
+                    return replicationSnapshotNames(await replicationSpawn(command, { err: "out", superuser: "require" }));
                 }
 
                 function replicationRefreshLogs() {
@@ -626,7 +809,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     $("#replication-task-ssh-test-${filesystem.id}").text("sudo ssh -o BatchMode=yes " + sshUser + "@" + sshHost + " true");
                 }
 
-                function replicationValidationErrors() {
+                function replicationValidationErrors(runNow) {
                     let errors = [];
                     let mBufferSize = Number($("#input-storagepool-replication-task-mbuffersize-${filesystem.id}").val());
                     let sourcePlans = $('#src-storagepool-replication-task-${filesystem.id} > [data-type="src"]');
@@ -636,6 +819,8 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     if (!${JSON.stringify(!!znapzendCommand)}) errors.push("znapzend was not found. Install znapzend on this server.");
                     if (!${JSON.stringify(!!znapzendSetupCommand)}) errors.push("znapzendzetup was not found. Install the znapzend package on this server.");
                     if (!${JSON.stringify(!!mbufferCommand)}) errors.push("mbuffer was not found. Install the mbuffer package on this server.");
+                    if (runNow && !${JSON.stringify(!!systemdRunCommand)}) errors.push("systemd-run was not found. It is required for a persistent background run.");
+                    if (runNow && !${JSON.stringify(!!replicationJobHelper)}) errors.push("The background replication helper is missing. Reinstall Cockpit ZFS Manager.");
                     if (!Number.isFinite(mBufferSize) || mBufferSize <= 0) errors.push("mBuffer size must be greater than zero.");
                     if (!sourcePlans.length) errors.push("Add at least one source retention plan.");
                     sourcePlans.each((i, el) => {
@@ -660,8 +845,13 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                 $("#modal-storagepool-replication-task-configure-${filesystem.id}").on("replication-wizard-review", function () {
                     replicationReview();
                     replicationRefreshLogs();
+                    replicationRefreshJobStatus();
                 });
                 $("#btn-replication-task-logs-${filesystem.id}").on("click", replicationRefreshLogs);
+                $("#btn-replication-task-job-status-${filesystem.id}").on("click", replicationRefreshJobStatus);
+                $("#modal-storagepool-replication-task-configure-${filesystem.id}").on("hidden.bs.modal", function () {
+                    if (replicationJobStatusTimer) clearTimeout(replicationJobStatusTimer);
+                });
                 $("#input-storagepool-replication-task-use-destination-${filesystem.id}, #input-storagepool-replication-task-external-${filesystem.id}, #input-storagepool-replication-task-user-${filesystem.id}, #input-storagepool-replication-task-host-${filesystem.id}, #select-storagepool-replication-task-dst-pool-${filesystem.id}, #select-storagepool-replication-task-dst-dataset-${filesystem.id}, #input-storagepool-replication-task-dst-dataset-${filesystem.id}").on("input change", replicationDestinationPreview);
                 replicationDestinationPreview();
 
@@ -913,11 +1103,12 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     let runNow = event.currentTarget.id === "btn-storagepool-replication-task-apply-run-now-${filesystem.id}";
                     $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Preparing replication configuration...");
                     try {
-                    let validationErrors = replicationValidationErrors();
+                    let validationErrors = replicationValidationErrors(runNow);
                     if (validationErrors.length) {
                         $("#replication-task-validation-${filesystem.id}").removeClass("hidden").html("<strong>Correct these fields before applying:</strong><ul><li>" + validationErrors.join("</li><li>") + "</li></ul>");
                         return;
                     }
+                    $("#btn-storagepool-replication-task-configure-run-${filesystem.id}, #btn-storagepool-replication-task-apply-run-now-${filesystem.id}, #btn-storagepool-replication-task-delete-${filesystem.id}").prop("disabled", true);
                     let recursive = $("#input-storagepool-replication-task-recursive-` + filesystem.id + `").get(0).checked;
                     let useDestination = $("#input-storagepool-replication-task-use-destination-` + filesystem.id + `").get(0).checked;
 
@@ -1011,9 +1202,115 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         ? cockpit.spawn([${JSON.stringify(znapzendSetupCommand || 'znapzendzetup')}, 'delete', '--dst=a', '${filesystem.name}'], { err: "out", superuser: "require" }).then(runConfiguration)
                         : runConfiguration();
 
+                    async function replicationStartBackground(configurationLog) {
+                        $("#spinner-storagepool-replication-task-configure-${filesystem.id} span").text("Starting background replication...");
+                        $("#replication-task-operation-log-${filesystem.id}").text(configurationLog + "\\n\\nValidating replication history before starting the background job...");
+
+                        try {
+                            if (createDestinationDataset) {
+                                await replicationSpawn([${JSON.stringify(znapzendSetupCommand || 'znapzendzetup')}, 'enable-dst-autocreation', '${filesystem.name}', 'a'], { err: "out", superuser: "require" });
+                            }
+                            await replicationSpawn(['/usr/bin/systemctl', 'reset-failed', 'znapzend.service'], { err: "out", superuser: "require" });
+
+                            let currentJob = await replicationRefreshJobStatus();
+                            if (currentJob && (currentJob.displayedStatus === "queued" || currentJob.displayedStatus === "running")) {
+                                throw new Error("A replication job for ${filesystem.name} is already running in background unit " + currentJob.state.unit + ".");
+                            }
+
+                            let snapshotsBefore = await replicationReadSnapshots('${filesystem.name}', false, "", "", false);
+                            let destinationExists = useDestination
+                                ? await replicationDatasetExists(dstDataset, external, externalUser, externalHost)
+                                : false;
+                            let destinationSnapshotsBefore = useDestination && destinationExists
+                                ? await replicationReadSnapshots(dstDataset, external, externalUser, externalHost, false)
+                                : [];
+                            let recoveredIncompleteDestination = false;
+
+                            if (useDestination) {
+                                let sourceExistingSuffixes = new Set(replicationDatasetSnapshotSuffixes(snapshotsBefore, '${filesystem.name}'));
+                                let destinationExistingSuffixes = replicationDatasetSnapshotSuffixes(destinationSnapshotsBefore, dstDataset);
+                                let hasCommonSnapshot = destinationExistingSuffixes.some(suffix => sourceExistingSuffixes.has(suffix));
+                                if (destinationExists && !hasCommonSnapshot) {
+                                    let canRecoverLocally = !external && destinationSnapshotsBefore.length === 0;
+                                    if (canRecoverLocally) {
+                                        let destinationDatasets = await replicationReadDatasets(dstDataset, false, "", "");
+                                        if (destinationDatasets.length > 1) {
+                                            let childError = new Error("Destination dataset " + dstLocation + " has child datasets and no common snapshot with ${filesystem.name}.");
+                                            childError.commandOutput = "The manager will not remove a dataset tree automatically. Choose a new destination dataset or recover it manually.";
+                                            throw childError;
+                                        }
+
+                                        let confirmation = window.prompt(
+                                            "The destination " + dstLocation + " has no snapshots and no common replication history. It may have been left by the interrupted initial run.\\n\\n" +
+                                            "To retry, the background job must permanently delete this exact dataset first. ALL files and properties currently inside it will be removed. Child datasets are never removed by this recovery action.\\n\\n" +
+                                            "Type the exact dataset name to approve, or choose Cancel to leave it unchanged:\\n" + dstDataset,
+                                            ""
+                                        );
+                                        if (confirmation !== dstDataset) {
+                                            let cancelledError = new Error("Destination dataset " + dstLocation + " already exists, but it has no common snapshot with ${filesystem.name}.");
+                                            cancelledError.commandOutput = "The destination was left unchanged. Choose a new dataset path, or run again and explicitly approve removal of the incomplete destination.";
+                                            throw cancelledError;
+                                        }
+
+                                        await replicationSpawn([${JSON.stringify(znapzendSetupCommand || 'znapzendzetup')}, 'enable-dst-autocreation', '${filesystem.name}', 'a'], { err: "out", superuser: "require" });
+                                        recoveredIncompleteDestination = true;
+                                    } else {
+                                        let historyError = new Error("Destination dataset " + dstLocation + " already exists, but it has no common snapshot with ${filesystem.name}. A full initial ZFS receive must create a new dataset.");
+                                        historyError.commandOutput = "Choose Create a new dataset and enter a path that does not exist yet. A destination containing snapshots will not be removed automatically.";
+                                        throw historyError;
+                                    }
+                                }
+                            }
+
+                            let jobId = replicationJobId();
+                            let unitName = "cockpit-zfs-replication-" + jobId + "-" + Date.now() + ".service";
+                            let backgroundCommand = [
+                                ${JSON.stringify(systemdRunCommand || 'systemd-run')},
+                                '--unit=' + unitName,
+                                '--description=Cockpit ZFS replication for ${filesystem.name}',
+                                '--collect',
+                                '--no-block',
+                                '--property=Type=oneshot',
+                                '--property=KillMode=control-group',
+                                ${JSON.stringify(replicationJobHelper || '/usr/share/cockpit/zfs/helpers/run-replication-job')},
+                                jobId,
+                                unitName,
+                                ${JSON.stringify(znapzendCommand || 'znapzend')},
+                                '${filesystem.name}',
+                                useDestination ? '1' : '0',
+                                useDestination ? dstLocation : '',
+                                external ? '1' : '0',
+                                external ? externalUser + '@' + externalHost : '',
+                                useDestination ? dstDataset : '',
+                                recoveredIncompleteDestination ? '1' : '0'
+                            ];
+
+                            await replicationSpawn(backgroundCommand, { err: "out", superuser: "require" });
+                            replicationJobLaunchPendingUntil = Date.now() + 10000;
+                            let finalLog = configurationLog + "\\n\\nBackground replication accepted by systemd.\\nUnit: " + unitName + "\\nThe job continues if this page is closed or reloaded.";
+                            if (recoveredIncompleteDestination) finalLog += "\\n\\nThe background job will remove the confirmed incomplete destination " + dstLocation + " and recreate it with the initial receive.";
+                            $("#replication-task-operation-log-${filesystem.id}").text(finalLog);
+                            $("#spinner-storagepool-replication-task-configure-${filesystem.id}").addClass("hidden");
+                            FnReplicationWizardShowStep("#modal-storagepool-replication-task-configure-${filesystem.id}", 4);
+                            FnReplicationTaskCreate({ name: '${filesystem.name}' }, { name: '${pool.name}', id: '${pool.id}' }, { tag: '${modal.tag}' }, { runNow: true, background: true, unit: unitName, destination: useDestination ? dstLocation : "" });
+                            setTimeout(replicationRefreshJobStatus, 500);
+                        } catch (error) {
+                            let details = replicationErrorText(error);
+                            $("#spinner-storagepool-replication-task-configure-${filesystem.id}").addClass("hidden");
+                            $("#btn-storagepool-replication-task-configure-run-${filesystem.id}, #btn-storagepool-replication-task-apply-run-now-${filesystem.id}, #btn-storagepool-replication-task-delete-${filesystem.id}").prop("disabled", false);
+                            $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text("The task was saved, but the background replication could not be started.");
+                            $("#replication-task-operation-log-${filesystem.id}").text(configurationLog + "\\n\\nBackground run could not be started:\\n" + details);
+                            FnDisplayAlert({ status: "warning", title: "Replication task saved; background run not started", description: details, breakword: true }, { name: "replicationtask-configure" });
+                        }
+                    }
+
                     process.then(async data => {
+                        if (runNow) {
+                            let backgroundConfigurationLog = "[" + new Date().toLocaleString() + "] Configuration completed successfully.\\n\\nCommand:\\n" + command.join(" ") + "\\n\\nOutput:\\n" + (data || "No output.");
+                            await replicationStartBackground(backgroundConfigurationLog);
+                            return;
+                        }
                         let configurationLog = "[" + new Date().toLocaleString() + "] Configuration completed successfully.\\n\\nCommand:\\n" + command.join(" ") + "\\n\\nOutput:\\n" + (data || "No output.");
-                        let postApplyPhase = "service";
                         $("#replication-task-operation-log-${filesystem.id}").text(configurationLog + "\\n\\nStarting znapzend service...");
 
                         let destinationSetup = createDestinationDataset
@@ -1024,89 +1321,17 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                             await destinationSetup;
                             await replicationSpawn(['/usr/bin/systemctl', 'reset-failed', 'znapzend.service'], { err: "out", superuser: "require" });
 
-                            let result = { serviceOutput: "", runOutput: null, createdSnapshots: [], replicatedSnapshots: [] };
-                            if (!runNow) {
-                                result.serviceOutput = await replicationSpawn(['/usr/bin/systemctl', 'restart', 'znapzend.service'], { err: "out", superuser: "require" });
-                            } else {
-                                postApplyPhase = "run";
-                                $("#spinner-storagepool-replication-task-configure-${filesystem.id} span").text("Running replication now...");
-                                $("#replication-task-operation-log-${filesystem.id}").text(configurationLog + "\\n\\nStopping the scheduler temporarily, then running '${filesystem.name}' now...");
-
-                                await replicationSpawn(['/usr/bin/systemctl', 'stop', 'znapzend.service'], { err: "out", superuser: "require" });
-
-                                let runFailure = null;
-                                try {
-                                    let snapshotsBefore = await replicationReadSnapshots('${filesystem.name}', false, "", "", false);
-                                    let destinationExists = useDestination
-                                        ? await replicationDatasetExists(dstDataset, external, externalUser, externalHost)
-                                        : false;
-                                    let destinationSnapshotsBefore = useDestination && destinationExists
-                                        ? await replicationReadSnapshots(dstDataset, external, externalUser, externalHost, false)
-                                        : [];
-                                    if (useDestination) {
-                                        let sourceExistingSuffixes = new Set(replicationDatasetSnapshotSuffixes(snapshotsBefore, '${filesystem.name}'));
-                                        let destinationExistingSuffixes = replicationDatasetSnapshotSuffixes(destinationSnapshotsBefore, dstDataset);
-                                        let hasCommonSnapshot = destinationExistingSuffixes.some(suffix => sourceExistingSuffixes.has(suffix));
-                                        if (destinationExists && !hasCommonSnapshot) {
-                                            let historyError = new Error("Destination dataset " + dstLocation + " already exists, but it has no common snapshot with ${filesystem.name}. A full initial ZFS receive must create a new dataset.");
-                                            historyError.commandOutput = "Choose Create a new dataset and enter a path that does not exist yet, such as apps-backup-v2. The existing destination will not be modified.";
-                                            throw historyError;
-                                        }
-                                    }
-                                    let runCommand = [${JSON.stringify(znapzendCommand || 'znapzend')}, '--nodelay', useDestination ? '--features=recvu' : null, '--runonce=${filesystem.name}'].filter(Boolean);
-                                    result.runOutput = await replicationSpawn(runCommand, { err: "out", superuser: "require" });
-                                    let snapshotsAfter = await replicationReadSnapshots('${filesystem.name}', false, "", "", false);
-                                    let existingSnapshots = new Set(snapshotsBefore);
-                                    result.createdSnapshots = snapshotsAfter.filter(name => !existingSnapshots.has(name));
-                                    if (!result.createdSnapshots.length) {
-                                        let verificationError = new Error("znapzend finished, but ZFS did not report a new snapshot for ${filesystem.name}.");
-                                        verificationError.commandOutput = result.runOutput || "No output was returned by znapzend.";
-                                        throw verificationError;
-                                    }
-                                    if (useDestination) {
-                                        let destinationSnapshotsAfter = await replicationReadSnapshots(dstDataset, external, externalUser, externalHost, false);
-                                        let existingDestinationSnapshots = new Set(destinationSnapshotsBefore);
-                                        let sourceSuffixes = new Set(replicationDatasetSnapshotSuffixes(result.createdSnapshots, '${filesystem.name}'));
-                                        result.replicatedSnapshots = destinationSnapshotsAfter.filter(name => name.startsWith(dstDataset + "@") && !existingDestinationSnapshots.has(name) && sourceSuffixes.has(replicationSnapshotSuffix(name)));
-                                        if (!result.replicatedSnapshots.length) {
-                                            let replicationError = new Error("The source snapshot was created, but no matching snapshot appeared at destination " + dstLocation + ".");
-                                            replicationError.commandOutput = result.runOutput || "No output was returned by znapzend.";
-                                            throw replicationError;
-                                        }
-                                    }
-                                } catch (error) {
-                                    runFailure = error;
-                                }
-
-                                try {
-                                    result.serviceOutput = await replicationSpawn(['/usr/bin/systemctl', 'start', 'znapzend.service'], { err: "out", superuser: "require" });
-                                } catch (serviceError) {
-                                    if (runFailure) {
-                                        runFailure.serviceStartError = replicationErrorText(serviceError);
-                                    } else {
-                                        postApplyPhase = "service";
-                                        throw serviceError;
-                                    }
-                                }
-                                if (runFailure) throw runFailure;
-                            }
-
-                            let finalLog = configurationLog + "\\n\\nDestination auto-creation: " + (createDestinationDataset ? "Enabled" : "Not required") + "\\nService: znapzend.service started successfully.\\n" + result.serviceOutput;
-                            if (result.runOutput !== null) {
-                                finalLog += "\\n\\nRun now completed and verified for ${filesystem.name}.\\nSource snapshot(s):\\n  - " + result.createdSnapshots.join("\\n  - ");
-                                if (useDestination) finalLog += "\\nReplicated snapshot(s) at " + dstLocation + ":\\n  - " + result.replicatedSnapshots.join("\\n  - ");
-                                finalLog += "\\n\\nznapzend output:\\n" + (result.runOutput || "No output.");
-                            }
+                            let serviceOutput = await replicationSpawn(['/usr/bin/systemctl', 'restart', 'znapzend.service'], { err: "out", superuser: "require" });
+                            let finalLog = configurationLog + "\\n\\nDestination auto-creation: " + (createDestinationDataset ? "Enabled" : "Not required") + "\\nService: znapzend.service restarted successfully.\\n" + serviceOutput;
                             $("#replication-task-operation-log-${filesystem.id}").text(finalLog);
-                            FnReplicationTaskCreate({ name: '${filesystem.name}' }, { name: '${pool.name}', id: '${pool.id}' }, { tag: '${modal.tag}' }, { runNow: runNow, createdSnapshots: result.createdSnapshots, destination: useDestination ? dstLocation : "", replicatedSnapshots: result.replicatedSnapshots });
+                            FnReplicationTaskCreate({ name: '${filesystem.name}' }, { name: '${pool.name}', id: '${pool.id}' }, { tag: '${modal.tag}' }, { runNow: false });
                         } catch (error) {
                             let details = replicationErrorText(error);
-                            if (error.serviceStartError) details += "\\nThe scheduler could not be restored:\\n" + error.serviceStartError;
                             $("#spinner-storagepool-replication-task-configure-${filesystem.id}").addClass("hidden");
-                            let phaseMessage = postApplyPhase === "run" ? "The task was saved, but the immediate snapshot and replication could not be fully verified." : "The task was saved, but the znapzend service could not be started automatically.";
-                            $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text(phaseMessage);
-                            $("#replication-task-operation-log-${filesystem.id}").text(configurationLog + "\\n\\n" + (postApplyPhase === "run" ? "Run now failed" : "Service start failed") + ":\\n" + details);
-                            FnDisplayAlert({ status: "warning", title: postApplyPhase === "run" ? "Replication task saved; run now failed" : "Replication task saved; service not started", description: details, breakword: true }, { name: "replicationtask-configure" });
+                            $("#btn-storagepool-replication-task-configure-run-${filesystem.id}, #btn-storagepool-replication-task-apply-run-now-${filesystem.id}, #btn-storagepool-replication-task-delete-${filesystem.id}").prop("disabled", false);
+                            $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text("The task was saved, but the znapzend service could not be started automatically.");
+                            $("#replication-task-operation-log-${filesystem.id}").text(configurationLog + "\\n\\nService start failed:\\n" + details);
+                            FnDisplayAlert({ status: "warning", title: "Replication task saved; service not started", description: details, breakword: true }, { name: "replicationtask-configure" });
                         }
                     });
 
@@ -1114,6 +1339,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         let details = [output, replicationErrorText(error)].filter(Boolean).join("\\n").trim();
                         FnReplicationWizardShowStep("#modal-storagepool-replication-task-configure-${filesystem.id}", 4);
                         $("#spinner-storagepool-replication-task-configure-${filesystem.id}").addClass("hidden");
+                        $("#btn-storagepool-replication-task-configure-run-${filesystem.id}, #btn-storagepool-replication-task-apply-run-now-${filesystem.id}, #btn-storagepool-replication-task-delete-${filesystem.id}").prop("disabled", false);
                         $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text("znapzend could not save this configuration. Review the detailed output below.");
                         $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Configuration failed.\\n\\nCommand:\\n" + command.join(" ") + "\\n\\nError:\\n" + details);
                         FnDisplayAlert({ status: "danger", title: "Replication task could not be configured", description: "The detailed znapzend error is available in Review & Logs.", breakword: false }, { name: "replicationtask-configure" });
@@ -1122,6 +1348,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         let details = replicationErrorText(error);
                         FnReplicationWizardShowStep("#modal-storagepool-replication-task-configure-${filesystem.id}", 4);
                         $("#spinner-storagepool-replication-task-configure-${filesystem.id}").addClass("hidden");
+                        $("#btn-storagepool-replication-task-configure-run-${filesystem.id}, #btn-storagepool-replication-task-apply-run-now-${filesystem.id}, #btn-storagepool-replication-task-delete-${filesystem.id}").prop("disabled", false);
                         $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text("The configuration could not be prepared. Review the technical details below.");
                         $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Configuration preparation failed.\\n\\nError:\\n" + details);
                         FnDisplayAlert({ status: "danger", title: "Replication task could not be prepared", description: details, breakword: true }, { name: "replicationtask-configure" });
@@ -1156,6 +1383,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                     if (!$("#input-storagepool-replication-task-external-${filesystem.id}").prop("checked")) replicationInitializeLocalDestination();
                     replicationToggleExternalFields();
                     replicationDestinationPreview();
+                    replicationRefreshJobStatus();
                 } catch (error) {
                     $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text("Destination fields could not be initialized: " + replicationErrorText(error));
                     $("#replication-task-operation-log-${filesystem.id}").text("Destination initialization failed:\\n" + replicationErrorText(error));
@@ -1173,6 +1401,13 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
 }
 
 function FnReplicationTaskCreate(filesystem, pool, modal, result) {
+    if (result?.background) {
+        let description = "The job continues independently from this page.";
+        if (result.destination) description += " Destination: " + result.destination + ".";
+        FnDisplayAlert({ status: "info", title: "Replication started in background", description, breakword: false }, { name: "replicationtask-configure" });
+        return;
+    }
+
     let runCompleted = result?.runNow && result.createdSnapshots?.length;
     let title = runCompleted ? "Replication completed" : "Replication task configured";
     let description = filesystem.name;

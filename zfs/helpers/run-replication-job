@@ -1,0 +1,220 @@
+#!/bin/sh
+
+# Run an immediate znapzend replication independently from the Cockpit page.
+# The small state file lets the UI recover job status after a reload, while the
+# systemd journal remains the authoritative detailed log.
+
+set -u
+
+if [ "$#" -ne 10 ]; then
+    echo "usage: $0 JOB_ID UNIT ZNAPZEND SOURCE USE_DESTINATION DESTINATION EXTERNAL REMOTE DEST_DATASET RESET_DESTINATION" >&2
+    exit 64
+fi
+
+job_id=$1
+unit_name=$2
+znapzend_bin=$3
+source_dataset=$4
+use_destination=$5
+destination=$6
+external_destination=$7
+remote_target=$8
+destination_dataset=$9
+reset_destination=${10}
+
+case "$job_id" in
+    ''|*[!a-z0-9-]*)
+        echo "invalid replication job id" >&2
+        exit 64
+        ;;
+esac
+
+case "$unit_name" in
+    ''|*[!A-Za-z0-9_.@-]*)
+        echo "invalid replication systemd unit name" >&2
+        exit 64
+        ;;
+esac
+
+if [ ! -x "$znapzend_bin" ]; then
+    echo "znapzend executable not found: $znapzend_bin" >&2
+    exit 69
+fi
+
+state_dir=/var/lib/cockpit-zfs-manager/replication-jobs
+state_file=$state_dir/$job_id.state
+lock_file=/run/lock/cockpit-zfs-manager-replication.lock
+started_at=$(date +%s)
+service_stopped=0
+final_status=failed
+final_phase=failed
+snapshots_before=
+snapshots_after=
+destination_snapshots_after=
+
+mkdir -p "$state_dir"
+chmod 0755 "$state_dir"
+
+write_state() {
+    status=$1
+    phase=$2
+    exit_code=$3
+    finished_at=$4
+    temporary_state=$state_file.tmp.$$
+
+    umask 022
+    {
+        printf 'version=1\n'
+        printf 'job_id=%s\n' "$job_id"
+        printf 'unit=%s\n' "$unit_name"
+        printf 'source=%s\n' "$source_dataset"
+        printf 'destination_enabled=%s\n' "$use_destination"
+        printf 'destination=%s\n' "$destination"
+        printf 'status=%s\n' "$status"
+        printf 'phase=%s\n' "$phase"
+        printf 'started_at=%s\n' "$started_at"
+        printf 'finished_at=%s\n' "$finished_at"
+        printf 'exit_code=%s\n' "$exit_code"
+    } > "$temporary_state"
+    mv -f "$temporary_state" "$state_file"
+}
+
+finish_job() {
+    job_exit=$?
+    trap - EXIT HUP INT TERM
+
+    [ -z "$snapshots_before" ] || rm -f "$snapshots_before"
+    [ -z "$snapshots_after" ] || rm -f "$snapshots_after"
+    [ -z "$destination_snapshots_after" ] || rm -f "$destination_snapshots_after"
+
+    if [ "$service_stopped" -eq 1 ]; then
+        write_state running restoring-scheduler "$job_exit" ''
+        echo "Starting znapzend scheduler..."
+        systemctl start znapzend.service
+        scheduler_exit=$?
+        if [ "$scheduler_exit" -ne 0 ]; then
+            echo "Failed to restart znapzend.service." >&2
+            final_status=failed
+            final_phase=scheduler-restore-failed
+            if [ "$job_exit" -eq 0 ]; then
+                job_exit=$scheduler_exit
+            fi
+        fi
+    fi
+
+    if [ "$job_exit" -eq 0 ] && [ "$final_status" = succeeded ]; then
+        write_state succeeded completed 0 "$(date +%s)"
+        echo "Background replication completed successfully."
+    else
+        write_state failed "$final_phase" "$job_exit" "$(date +%s)"
+        echo "Background replication failed with exit status $job_exit." >&2
+    fi
+
+    exit "$job_exit"
+}
+
+trap finish_job EXIT
+trap 'exit 143' HUP INT TERM
+
+source_snapshot_suffixes() {
+    snapshot_output=$(/sbin/zfs list -H -t snapshot -r "$source_dataset" -o name -s creation) || return $?
+    printf '%s\n' "$snapshot_output" |
+        awk -v prefix="$source_dataset@" 'index($0, prefix) == 1 { print substr($0, length(prefix) + 1) }' |
+        sort -u
+}
+
+destination_snapshot_suffixes() {
+    if [ "$external_destination" = 1 ]; then
+        snapshot_output=$(/usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=15 "$remote_target" \
+            zfs list -H -t snapshot -r "$destination_dataset" -o name -s creation) || return $?
+    else
+        snapshot_output=$(/sbin/zfs list -H -t snapshot -r "$destination_dataset" -o name -s creation) || return $?
+    fi
+    printf '%s\n' "$snapshot_output" |
+        awk -v prefix="$destination_dataset@" 'index($0, prefix) == 1 { print substr($0, length(prefix) + 1) }' |
+        sort -u
+}
+
+write_state queued waiting-for-lock '' ''
+echo "Waiting for the replication execution lock..."
+exec 9>"$lock_file"
+if ! flock 9; then
+    final_phase=lock-failed
+    exit 1
+fi
+
+write_state running stopping-scheduler '' ''
+echo "Stopping znapzend scheduler for the immediate run..."
+if ! systemctl stop znapzend.service; then
+    final_phase=scheduler-stop-failed
+    exit 1
+fi
+service_stopped=1
+
+write_state running replicating '' ''
+echo "Starting immediate replication for $source_dataset in background unit $unit_name."
+
+if [ "$reset_destination" = 1 ]; then
+    write_state running removing-incomplete-destination '' ''
+    echo "Removing confirmed incomplete destination dataset $destination_dataset before retrying the initial receive."
+    if ! /sbin/zfs destroy "$destination_dataset"; then
+        final_phase=destination-reset-failed
+        exit 1
+    fi
+    write_state running replicating '' ''
+fi
+
+snapshots_before=$(mktemp /run/cockpit-zfs-replication-before.XXXXXX)
+snapshots_after=$(mktemp /run/cockpit-zfs-replication-after.XXXXXX)
+if ! source_snapshot_suffixes > "$snapshots_before"; then
+    final_phase=source-snapshot-read-failed
+    exit 1
+fi
+
+if [ "$use_destination" = 1 ]; then
+    "$znapzend_bin" --nodelay --features=recvu "--runonce=$source_dataset"
+else
+    "$znapzend_bin" --nodelay "--runonce=$source_dataset"
+fi
+
+replication_exit=$?
+if [ "$replication_exit" -ne 0 ]; then
+    final_phase=replication-failed
+    exit "$replication_exit"
+fi
+
+write_state running verifying '' ''
+if ! source_snapshot_suffixes > "$snapshots_after"; then
+    final_phase=source-verification-failed
+    exit 1
+fi
+
+new_source_snapshots=$(comm -13 "$snapshots_before" "$snapshots_after")
+if [ -z "$new_source_snapshots" ]; then
+    echo "znapzend exited successfully, but no new source snapshot was found." >&2
+    final_phase=source-verification-failed
+    exit 1
+fi
+
+echo "New source snapshot suffixes:"
+printf '%s\n' "$new_source_snapshots"
+
+if [ "$use_destination" = 1 ]; then
+    destination_snapshots_after=$(mktemp /run/cockpit-zfs-replication-destination.XXXXXX)
+    if ! destination_snapshot_suffixes > "$destination_snapshots_after"; then
+        final_phase=destination-verification-failed
+        exit 1
+    fi
+    matching_destination_snapshots=$(printf '%s\n' "$new_source_snapshots" | sort -u | comm -12 - "$destination_snapshots_after")
+    if [ -z "$matching_destination_snapshots" ]; then
+        echo "No destination snapshot matches the new source snapshot." >&2
+        final_phase=destination-verification-failed
+        exit 1
+    fi
+    echo "Verified destination snapshot suffixes:"
+    printf '%s\n' "$matching_destination_snapshots"
+fi
+
+final_status=succeeded
+final_phase=completed
+exit 0
