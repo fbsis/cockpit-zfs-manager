@@ -202,11 +202,11 @@ function FnReplicationTaskRenderListStatus(status, filesystemId) {
 
     if (status.error) {
         let errorMessage = status.errorMessage || "Replication error";
-        content = `<button class="btn btn-link replication-ct-list-error" data-configure-button="#btn-storagepool-replication-task-configure-${replicationEscapeHtml(filesystemId)}" title="${replicationEscapeHtml(errorMessage)}" type="button"><span aria-hidden="true" class="fa fa-exclamation-triangle"></span><span class="sr-only">Open replication error</span></button><span class="replication-ct-list-details"><strong>Error</strong><small>${replicationEscapeHtml(lastText)}</small></span>`;
+        content = `<button class="btn btn-link replication-ct-list-error" data-configure-button="#btn-storagepool-replication-task-configure-${replicationEscapeHtml(filesystemId)}" title="${replicationEscapeHtml(errorMessage)}" type="button"><span aria-hidden="true" class="glyphicon glyphicon-exclamation-sign"></span><span class="sr-only">Open replication error</span></button><span class="replication-ct-list-details"><strong>Error</strong><small>${replicationEscapeHtml(lastText)}</small></span>`;
     } else if (status.configured) {
-        content = `<span aria-hidden="true" class="fa fa-circle replication-ct-list-icon replication-ct-list-icon-ok"></span><span class="replication-ct-list-details"><strong>${status.running ? "Running" : "Configured"}</strong><small>${replicationEscapeHtml(lastText)}</small></span>`;
+        content = `<span aria-hidden="true" class="glyphicon glyphicon-ok-sign replication-ct-list-icon replication-ct-list-icon-ok"></span><span class="replication-ct-list-details"><strong>${status.running ? "Running" : "Configured"}</strong><small>${replicationEscapeHtml(lastText)}</small></span>`;
     } else {
-        content = `<span aria-hidden="true" class="fa fa-circle replication-ct-list-icon replication-ct-list-icon-off"></span><span class="replication-ct-list-details"><strong>Not configured</strong></span>`;
+        content = `<span aria-hidden="true" class="glyphicon glyphicon-remove-sign replication-ct-list-icon replication-ct-list-icon-off"></span><span class="replication-ct-list-details"><strong>Not configured</strong></span>`;
     }
 
     return `<td class="replication-ct-list-cell"><span class="table-ct-head">Replication:</span><span class="replication-ct-list-status">${content}</span></td>`;
