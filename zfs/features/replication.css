@@ -197,6 +197,12 @@
     margin-right: auto;
 }
 
+.replication-ct-delete-button {
+    min-width: 2.25rem;
+    padding-right: 0.65rem;
+    padding-left: 0.65rem;
+}
+
 .replication-ct-footer .dialog-wait-ct {
     float: none !important;
     margin: 0;

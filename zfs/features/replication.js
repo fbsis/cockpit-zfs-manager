@@ -466,7 +466,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                 </div>
                 <div class="modal-footer replication-ct-footer">
                     <div class="replication-ct-danger-action">
-                        ${filesystem.replicationtask ? `<button id="btn-storagepool-replication-task-delete-${filesystem.id}" class="btn btn-danger apply privileged-modal" tabindex="-1" type="button">Delete Replication Task</button>` : ''}
+                        ${filesystem.replicationtask ? `<button id="btn-storagepool-replication-task-delete-${filesystem.id}" aria-label="Delete Replication Task" class="btn btn-danger apply privileged-modal replication-ct-delete-button" tabindex="-1" title="Delete Replication Task" type="button"><span aria-hidden="true" class="fa fa-trash"></span><span class="sr-only">Delete Replication Task</span></button>` : ''}
                     </div>
                     <div id="spinner-storagepool-replication-task-configure-` + filesystem.id + `" class="dialog-wait-ct pull-left hidden">
                         <div class="spinner spinner-sm"></div><span></span>
