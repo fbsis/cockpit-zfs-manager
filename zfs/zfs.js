@@ -1257,7 +1257,7 @@ function FnStoragePoolsGetCommand(process = { data, message }) {
 			<tbody class="hidden">
 				<tr id="tr-storagepool-` + pool.id + `" class="listing-ct-item listing-ct-nonavigate" data-pool-altroot="` + pool.altroot + `" data-pool-autotrim="` + pool.autotrim + `" data-pool-boot="` + pool.boot + `" data-pool-feature-allocation_classes="` + pool.feature.allocation_classes + `" data-pool-feature-device_removal="` + pool.feature.device_removal + `" data-pool-feature-edonr="` + pool.feature.edonr + `" data-pool-feature-encryption="` + pool.feature.encryption + `" data-pool-feature-large_blocks="` + pool.feature.large_blocks + `" data-pool-feature-large_dnode="` + pool.feature.large_dnode + `" data-pool-feature-lz4_compress="` + pool.feature.lz4_compress + `" data-pool-feature-resilver_defer="` + pool.feature.resilver_defer + `" data-pool-feature-sha512="` + pool.feature.sha512 + `" data-pool-feature-skein="` + pool.feature.skein + `" data-pool-guid="` + pool.guid + `" data-pool-id="` + pool.id + `" data-pool-name="` + pool.name + `" data-pool-readonly="` + pool.readonly + `" data-pool-refresh-id="" data-pool-refresh-filesystems="false" data-pool-refresh-snapshots="false" data-pool-refresh-status="false" data-pool-root="` + pool.root + `" data-pool-special="false" data-pool-upgrade="` + pool.upgrade + `" data-pool-version="` + pool.version + `">
 					<td class="listing-ct-toggle"><i class="fa fa-fw"></i></td>
-					<td colspan="2"><span class="table-ct-head">Name:</span>` + pool.name + (pool.readonly ? ` <span class="pficon pficon-private pficon-ct-` + (pool.boot && zfsmanager.configuration.zfs.storagepool.bootlockdown ? `boot` : ``) + `readonly" data-placement="auto top" data-toggle="tooltip" title="` + (pool.boot && zfsmanager.configuration.zfs.storagepool.bootlockdown ? `The user <strong>` + zfsmanager.user.name + `</strong> is not permitted to manage this storage pool` : `Storage Pool is Read Only`) + `"></span>` : (pool.altroot ? ` <span class="pf-icon pficon-migration pficon-ct-altroot" data-placement="auto top" data-toggle="tooltip" title="Alternative Root is Enabled for Storage Pool"></span>` : ``)) + ZFSOverview.renderPoolObservation(pool) + `</td>
+					<td colspan="2"><span class="table-ct-head">Name:</span>` + pool.name + (pool.readonly ? ` <span class="pficon pficon-private pficon-ct-` + (pool.boot && zfsmanager.configuration.zfs.storagepool.bootlockdown ? `boot` : ``) + `readonly" data-placement="auto top" data-toggle="tooltip" title="` + (pool.boot && zfsmanager.configuration.zfs.storagepool.bootlockdown ? `The user <strong>` + zfsmanager.user.name + `</strong> is not permitted to manage this storage pool` : `Storage Pool is Read Only`) + `"></span>` : (pool.altroot ? ` <span class="pf-icon pficon-migration pficon-ct-altroot" data-placement="auto top" data-toggle="tooltip" title="Alternative Root is Enabled for Storage Pool"></span>` : ``)) + ZFSOverview.renderPoolObservation(pool) + `<span id="scrub-schedule-badge-` + pool.id + `" class="hidden"></span></td>
 					<td>
 						<span class="table-ct-head">Health:</span><div id="div-storagepool-health-` + pool.id + `"><span class="` + pool.healthicon + `"></span> ` + pool.health + `</div>
 					</td>
@@ -1298,6 +1298,9 @@ function FnStoragePoolsGetCommand(process = { data, message }) {
 
         //Configure Storage Pool
         pool.actionsmenu.addAction('configuration', `<li><a id="btn-storagepool-configure-` + pool.id + `" data-toggle="modal" href="#modal-storagepool-configure-` + pool.id + `" tabIndex="-1">Configure Storage Pool</a></li>`);
+
+        //Schedule Storage Pool Scrub
+        pool.actionsmenu.addAction('configuration', `<li><a id="btn-storagepool-scrub-schedule-` + pool.id + `" class="privileged` + (!zfsmanager.user.admin ? " disabled" : "") + `" href="#modal-storagepool-scrub-schedule-` + pool.id + `" tabIndex="-1"><span class="glyphicon glyphicon-time" aria-hidden="true"></span> Schedule Scrub</a></li>`);
 
         //Configure Storage Pool Features
         pool.actionsmenu.addAction('feature_configuration', `<li><a id="btn-storagepool-configure-features-` + pool.id + `" data-toggle="modal" href="#modal-storagepool-configure-features-` + pool.id + `" tabIndex="-1">Configure Storage Pool Features</a></li>`);
@@ -1543,6 +1546,7 @@ function FnStoragePoolsGetCommand(process = { data, message }) {
         //Register storage pool modals
         FnModalStoragePoolConfigure({ name: pool.name, id: pool.id, boot: pool.boot, guid: pool.guid, readonly: false, root: pool.root });
         FnModalStoragePoolConfigureFeatures({ name: pool.name, id: pool.id, boot: pool.boot, readonly: false });
+        ZFSScrubSchedule.registerPool({ name: pool.name, id: pool.id });
         if (pool.actionsmenu.register.destroy) {
             FnModalStoragePoolDestroy({ name: pool.name, id: pool.id, altroot: pool.altroot });
         }

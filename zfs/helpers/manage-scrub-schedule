@@ -1,0 +1,189 @@
+#!/bin/sh
+
+# Manage Cockpit ZFS Manager's per-pool systemd scrub timers.
+# All user-controlled values are validated before any privileged file is written.
+
+set -eu
+
+usage() {
+    echo "usage: $0 save POOL SCHEDULE_ID ENABLED FREQUENCY DAY_VALUE HOUR MINUTE | delete POOL SCHEDULE_ID" >&2
+    exit 64
+}
+
+[ "$#" -ge 1 ] || usage
+
+operation=$1
+
+validate_pool() {
+    case "$1" in
+        ''|*[!A-Za-z0-9_.:-]*)
+            echo "invalid ZFS pool name" >&2
+            exit 64
+            ;;
+    esac
+}
+
+validate_id() {
+    case "$1" in
+        ''|*[!a-z0-9-]*)
+            echo "invalid scrub schedule id" >&2
+            exit 64
+            ;;
+    esac
+}
+
+if [ "$operation" = delete ]; then
+    [ "$#" -eq 3 ] || usage
+    pool=$2
+    schedule_id=$3
+    validate_pool "$pool"
+    validate_id "$schedule_id"
+
+    timer_unit=cockpit-zfs-scrub-$schedule_id.timer
+    service_path=/etc/systemd/system/cockpit-zfs-scrub-$schedule_id.service
+    timer_path=/etc/systemd/system/$timer_unit
+    state_path=/etc/cockpit/zfs/scrub-schedules/$schedule_id.conf
+
+    systemctl disable --now "$timer_unit" >/dev/null 2>&1 || true
+    rm -f "$service_path" "$timer_path" "$state_path"
+    systemctl daemon-reload
+    systemctl reset-failed "cockpit-zfs-scrub-$schedule_id.service" >/dev/null 2>&1 || true
+    exit 0
+fi
+
+[ "$operation" = save ] || usage
+[ "$#" -eq 8 ] || usage
+
+pool=$2
+schedule_id=$3
+enabled=$4
+frequency=$5
+day_value=$6
+hour=$7
+minute=$8
+
+validate_pool "$pool"
+validate_id "$schedule_id"
+
+case "$enabled" in
+    0|1) ;;
+    *) echo "invalid enabled value" >&2; exit 64 ;;
+esac
+
+case "$hour" in
+    ''|*[!0-9]*) echo "invalid hour" >&2; exit 64 ;;
+esac
+case "$minute" in
+    ''|*[!0-9]*) echo "invalid minute" >&2; exit 64 ;;
+esac
+[ "$hour" -ge 0 ] && [ "$hour" -le 23 ] || { echo "hour must be between 0 and 23" >&2; exit 64; }
+[ "$minute" -ge 0 ] && [ "$minute" -le 59 ] || { echo "minute must be between 0 and 59" >&2; exit 64; }
+
+hour_decimal=$(printf '%s\n' "$hour" | sed 's/^0*//')
+minute_decimal=$(printf '%s\n' "$minute" | sed 's/^0*//')
+[ -n "$hour_decimal" ] || hour_decimal=0
+[ -n "$minute_decimal" ] || minute_decimal=0
+hour_padded=$(printf '%02d' "$hour_decimal")
+minute_padded=$(printf '%02d' "$minute_decimal")
+
+case "$frequency" in
+    daily)
+        [ "$day_value" = daily ] || { echo "invalid daily schedule" >&2; exit 64; }
+        calendar="*-*-* $hour_padded:$minute_padded:00"
+        ;;
+    weekly)
+        old_ifs=$IFS
+        IFS=,
+        set -- $day_value
+        IFS=$old_ifs
+        [ "$#" -ge 1 ] || { echo "select at least one weekday" >&2; exit 64; }
+        for weekday in "$@"; do
+            case "$weekday" in
+                Mon|Tue|Wed|Thu|Fri|Sat|Sun) ;;
+                *) echo "invalid weekday" >&2; exit 64 ;;
+            esac
+        done
+        calendar="$day_value *-*-* $hour_padded:$minute_padded:00"
+        ;;
+    monthly)
+        case "$day_value" in
+            ''|*[!0-9]*) echo "invalid day of month" >&2; exit 64 ;;
+        esac
+        [ "$day_value" -ge 1 ] && [ "$day_value" -le 31 ] || { echo "day of month must be between 1 and 31" >&2; exit 64; }
+        day_decimal=$(printf '%s\n' "$day_value" | sed 's/^0*//')
+        [ -n "$day_decimal" ] || day_decimal=0
+        day_padded=$(printf '%02d' "$day_decimal")
+        calendar="*-*-$day_padded $hour_padded:$minute_padded:00"
+        ;;
+    *)
+        echo "invalid scrub frequency" >&2
+        exit 64
+        ;;
+esac
+
+unit_name=cockpit-zfs-scrub-$schedule_id
+service_path=/etc/systemd/system/$unit_name.service
+timer_path=/etc/systemd/system/$unit_name.timer
+state_dir=/etc/cockpit/zfs/scrub-schedules
+state_path=$state_dir/$schedule_id.conf
+
+mkdir -p "$state_dir"
+chmod 0755 "$state_dir"
+
+service_tmp=$(mktemp /etc/systemd/system/.cockpit-zfs-scrub-service.XXXXXX)
+timer_tmp=$(mktemp /etc/systemd/system/.cockpit-zfs-scrub-timer.XXXXXX)
+state_tmp=$(mktemp "$state_dir/.scrub-schedule.XXXXXX")
+
+cleanup() {
+    rm -f "$service_tmp" "$timer_tmp" "$state_tmp"
+}
+trap cleanup EXIT HUP INT TERM
+
+{
+    printf '[Unit]\n'
+    printf 'Description=Scheduled ZFS scrub for pool %s\n' "$pool"
+    printf 'Documentation=man:zpool-scrub(8)\n'
+    printf 'ConditionPathIsExecutable=/sbin/zpool\n\n'
+    printf '[Service]\n'
+    printf 'Type=oneshot\n'
+    printf 'ExecStart=/sbin/zpool scrub %s\n' "$pool"
+} > "$service_tmp"
+
+{
+    printf '[Unit]\n'
+    printf 'Description=Scheduled ZFS scrub timer for pool %s\n\n' "$pool"
+    printf '[Timer]\n'
+    printf 'OnCalendar=%s\n' "$calendar"
+    printf 'Persistent=true\n'
+    printf 'AccuracySec=1min\n'
+    printf 'Unit=%s.service\n\n' "$unit_name"
+    printf '[Install]\n'
+    printf 'WantedBy=timers.target\n'
+} > "$timer_tmp"
+
+{
+    printf 'version=1\n'
+    printf 'pool=%s\n' "$pool"
+    printf 'enabled=%s\n' "$enabled"
+    printf 'frequency=%s\n' "$frequency"
+    printf 'day_value=%s\n' "$day_value"
+    printf 'hour=%s\n' "$hour"
+    printf 'minute=%s\n' "$minute"
+    printf 'calendar=%s\n' "$calendar"
+} > "$state_tmp"
+
+chmod 0644 "$service_tmp" "$timer_tmp" "$state_tmp"
+mv -f "$service_tmp" "$service_path"
+mv -f "$timer_tmp" "$timer_path"
+mv -f "$state_tmp" "$state_path"
+
+systemctl daemon-reload
+if [ "$enabled" -eq 1 ]; then
+    systemctl enable "$unit_name.timer" >/dev/null
+    systemctl restart "$unit_name.timer"
+else
+    systemctl disable --now "$unit_name.timer" >/dev/null 2>&1 || true
+fi
+
+trap - EXIT HUP INT TERM
+exit 0

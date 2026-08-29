@@ -14,6 +14,10 @@ Current modules:
 
 - `replication.js` / `replication.css`: replication wizard, retention plans,
   presets, persistent systemd-backed run-now jobs, validation, status, and logs.
+- `scrub-schedule.js` / `scrub-schedule.css`: per-pool scheduled scrub editor,
+  timer status, next-run preview, conflict detection, and run-now controls.
+- `../helpers/manage-scrub-schedule`: validates and atomically manages the
+  systemd service, timer, and persistent schedule metadata for each pool.
 - `../helpers/run-replication-job`: serialized background replication runner. It
   restores the znapzend scheduler on exit, verifies the new source and
   destination snapshots, and stores reload-safe job state under
