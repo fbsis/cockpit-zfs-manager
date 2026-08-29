@@ -1425,7 +1425,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
     `;
 
     modal.id.empty().append(modal.content);
-    FnReplicationWizardShowStep(modal.id, 1);
+    FnReplicationWizardShowStep(modal.id, repTask ? 4 : 1);
     if (loadError) {
         $("#replication-task-operation-log-" + filesystem.id).text("Unable to load the existing znapzend configuration:\n" + loadError);
     }
