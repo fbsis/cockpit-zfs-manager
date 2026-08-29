@@ -202,6 +202,46 @@
     font-size: 0.9rem;
 }
 
+.zfs-pool-observation {
+    display: flex;
+    min-height: 1.2rem;
+    gap: 0.35rem;
+    align-items: center;
+    margin-top: 0.3rem;
+    color: var(--pf-global--Color--200);
+    font-size: 0.78rem;
+    font-weight: 400;
+    line-height: 1.25;
+}
+
+.zfs-pool-observation .pficon,
+.zfs-pool-observation .glyphicon {
+    flex: none;
+}
+
+.zfs-pool-observation-status-ok {
+    color: var(--pf-global--success-color--100);
+}
+
+.zfs-pool-observation-status-info {
+    color: var(--pf-global--primary-color--100);
+}
+
+.zfs-pool-observation-status-warning {
+    color: var(--pf-global--warning-color--100);
+}
+
+.zfs-pool-observation-status-danger {
+    color: var(--pf-global--danger-color--100);
+}
+
+.zfs-pool-observation-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 @media (max-width: 900px) {
     .zfs-overview-cards {
         grid-template-columns: 1fr 1fr;

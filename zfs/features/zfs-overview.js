@@ -146,6 +146,10 @@ var ZFSOverview = {
         this.renderSummary();
     },
 
+    renderPoolObservation(pool) {
+        return `<div id="zfs-pool-observation-${this.escapeHtml(pool.id)}" aria-live="polite" class="zfs-pool-observation" title="Reading ZFS pool observations"><span aria-hidden="true" class="glyphicon glyphicon-time"></span><span class="zfs-pool-observation-text">Reading scrub status...</span></div>`;
+    },
+
     refresh() {
         this.init();
         this.renderSummary();
@@ -457,12 +461,14 @@ var ZFSOverview = {
                     if (generation !== this.generation || !this.pools[pool.id]) return resolve();
                     pool.status = this.parsePoolStatus(data, pool.name);
                     pool.statusError = false;
+                    this.renderPoolObservationStatus(pool);
                     resolve();
                 })
                 .fail(() => {
                     if (generation !== this.generation || !this.pools[pool.id]) return resolve();
                     pool.status = null;
                     pool.statusError = true;
+                    this.renderPoolObservationUnavailable(pool);
                     resolve();
                 });
         }));
@@ -473,6 +479,86 @@ var ZFSOverview = {
                 this.updateTimestamp();
             }
         });
+    },
+
+    renderPoolObservationStatus(pool) {
+        let status = pool.status;
+        let errorCount = status.readErrors + status.writeErrors + status.checksumErrors;
+        let severity = "ok";
+        let icon = "glyphicon-ok-circle";
+        let text = "ZFS pool is healthy";
+
+        if (pool.health !== "ONLINE") {
+            severity = "danger";
+            icon = "glyphicon-exclamation-sign";
+            text = "Pool is " + pool.health;
+        } else if (status.dataErrors) {
+            severity = "danger";
+            icon = "glyphicon-exclamation-sign";
+            text = "Permanent data errors reported";
+        } else if (errorCount > 0 || status.scan.errors > 0) {
+            severity = "danger";
+            icon = "glyphicon-exclamation-sign";
+            text = (errorCount + status.scan.errors) + " ZFS " + (errorCount + status.scan.errors === 1 ? "error" : "errors") + " reported";
+        } else if (status.scan.state === "running" || status.scan.state === "paused") {
+            severity = "info";
+            icon = "glyphicon-refresh";
+            let operation = status.scan.type === "resilver" ? "Resilver" : "Scrub";
+            text = operation + (status.scan.state === "paused" ? " paused" : " running");
+            if (status.scan.percent) text += ": " + status.scan.percent.toLocaleString(undefined, { maximumFractionDigits: 1 }) + "%";
+            if (status.scan.eta) text += " · " + status.scan.eta + " remaining";
+        } else if (status.scan.state === "never") {
+            severity = "warning";
+            icon = "glyphicon-warning-sign";
+            text = "No scrub recorded by ZFS";
+        } else if (status.scan.date) {
+            let days = Math.max(0, Math.floor((Date.now() - status.scan.date.getTime()) / 86400000));
+            let operation = status.scan.type === "resilver" ? "resilver" : "scrub";
+            text = "Last " + operation + ": " + status.scan.date.toLocaleDateString() + " · " + status.scan.errors + (status.scan.errors === 1 ? " error" : " errors");
+            if (status.scan.repaired && status.scan.repaired !== "0B") text += " · " + status.scan.repaired + " repaired";
+            if (days > 35 && status.scan.type === "scrub") {
+                severity = "warning";
+                icon = "glyphicon-warning-sign";
+                text += " · " + days + " days ago";
+            }
+        } else if (status.scan.state === "canceled") {
+            severity = "warning";
+            icon = "glyphicon-warning-sign";
+            text = "Last ZFS scan was canceled";
+        }
+
+        if (pool.allocated / (pool.size || 1) >= 0.9 && severity !== "danger" && severity !== "info") {
+            severity = "danger";
+            icon = "glyphicon-exclamation-sign";
+            text = "Pool capacity is above 90%";
+        } else if (pool.allocated / (pool.size || 1) >= 0.8 && severity === "ok") {
+            severity = "warning";
+            icon = "glyphicon-warning-sign";
+            text = "Pool capacity is above 80%";
+        }
+
+        let title = [
+            status.scan.raw || "No ZFS scan information",
+            "READ: " + status.readErrors + ", WRITE: " + status.writeErrors + ", CKSUM: " + status.checksumErrors,
+            "Autotrim: " + (pool.autotrim ? "on" : "off"),
+            "Fragmentation: " + pool.fragmentation + "%"
+        ].join(" · ");
+
+        this.updatePoolObservation(pool.id, severity, icon, text, title);
+    },
+
+    renderPoolObservationUnavailable(pool) {
+        this.updatePoolObservation(pool.id, "warning", "glyphicon-question-sign", "Pool observations unavailable", "Unable to read zpool status for " + pool.name);
+    },
+
+    updatePoolObservation(poolId, severity, icon, text, title) {
+        let observation = $("#zfs-pool-observation-" + poolId);
+        if (!observation.length) return;
+        observation.removeClass("zfs-pool-observation-status-ok zfs-pool-observation-status-info zfs-pool-observation-status-warning zfs-pool-observation-status-danger")
+            .addClass("zfs-pool-observation-status-" + severity)
+            .attr("title", title);
+        observation.find(".glyphicon").attr("class", "glyphicon " + icon);
+        observation.find(".zfs-pool-observation-text").text(text);
     },
 
     updateTimestamp() {
