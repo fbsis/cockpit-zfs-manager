@@ -1,0 +1,230 @@
+.zfs-overview-ct {
+    margin: 1.5rem 0;
+}
+
+.zfs-overview-ct > header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+}
+
+.zfs-overview-ct > header h3 {
+    margin: 0;
+}
+
+.zfs-overview-updated {
+    color: var(--pf-global--Color--200);
+    font-size: 0.8rem;
+}
+
+.zfs-overview-cards {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1rem;
+}
+
+.zfs-overview-card,
+.zfs-overview-chart-card {
+    padding: 1rem;
+    border: 1px solid var(--pf-global--BorderColor--100);
+    border-radius: 3px;
+    background: var(--pf-global--BackgroundColor--100);
+    box-shadow: 0 1px 1px rgba(3, 3, 3, 0.08);
+}
+
+.zfs-overview-card {
+    min-height: 8.25rem;
+}
+
+.zfs-overview-card-header,
+.zfs-overview-chart-header {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    justify-content: space-between;
+}
+
+.zfs-overview-card-label,
+.zfs-overview-chart-title {
+    color: var(--pf-global--Color--200);
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.zfs-overview-card-icon {
+    color: var(--pf-global--primary-color--100);
+    font-size: 1.25rem;
+}
+
+.zfs-overview-card-value {
+    margin-top: 0.65rem;
+    color: var(--pf-global--Color--100);
+    font-size: 1.65rem;
+    font-weight: 600;
+    line-height: 1.1;
+}
+
+.zfs-overview-card-detail {
+    min-height: 1.25rem;
+    margin-top: 0.35rem;
+    color: var(--pf-global--Color--200);
+    font-size: 0.85rem;
+}
+
+.zfs-overview-card-status-ok .zfs-overview-card-icon {
+    color: var(--pf-global--success-color--100);
+}
+
+.zfs-overview-card-status-warning .zfs-overview-card-icon {
+    color: var(--pf-global--warning-color--100);
+}
+
+.zfs-overview-card-status-danger .zfs-overview-card-icon {
+    color: var(--pf-global--danger-color--100);
+}
+
+.zfs-overview-capacity-bar {
+    height: 0.45rem;
+    margin-top: 0.9rem;
+    overflow: hidden;
+    border-radius: 1rem;
+    background: var(--pf-global--BackgroundColor--150);
+}
+
+.zfs-overview-capacity-bar > span {
+    display: block;
+    width: 0;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--pf-global--primary-color--100);
+    transition: width 200ms ease;
+}
+
+.zfs-overview-card-status-warning .zfs-overview-capacity-bar > span {
+    background: var(--pf-global--warning-color--100);
+}
+
+.zfs-overview-card-status-danger .zfs-overview-capacity-bar > span {
+    background: var(--pf-global--danger-color--100);
+}
+
+.zfs-overview-chart-card {
+    grid-column: 1 / -1;
+    min-height: 14rem;
+}
+
+.zfs-overview-chart-values {
+    display: flex;
+    gap: 1.25rem;
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
+.zfs-overview-chart-read,
+.zfs-overview-chart-write {
+    display: inline-flex;
+    gap: 0.4rem;
+    align-items: center;
+}
+
+.zfs-overview-chart-read::before,
+.zfs-overview-chart-write::before {
+    width: 0.75rem;
+    height: 0.2rem;
+    border-radius: 1rem;
+    content: "";
+}
+
+.zfs-overview-chart-read::before {
+    background: var(--pf-global--primary-color--100);
+}
+
+.zfs-overview-chart-write::before {
+    background: var(--pf-global--success-color--100);
+}
+
+.zfs-overview-chart-wrap {
+    position: relative;
+    height: 9.5rem;
+    margin-top: 1rem;
+}
+
+.zfs-overview-chart {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.zfs-overview-chart-grid {
+    fill: none;
+    stroke: var(--pf-global--BorderColor--100);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
+
+.zfs-overview-chart-area-read {
+    fill: var(--pf-global--primary-color--100);
+    opacity: 0.08;
+}
+
+.zfs-overview-chart-line-read,
+.zfs-overview-chart-line-write {
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 2;
+    vector-effect: non-scaling-stroke;
+}
+
+.zfs-overview-chart-line-read {
+    stroke: var(--pf-global--primary-color--100);
+}
+
+.zfs-overview-chart-line-write {
+    stroke: var(--pf-global--success-color--100);
+}
+
+.zfs-overview-chart-scale {
+    fill: var(--pf-global--Color--200);
+    font-size: 9px;
+}
+
+.zfs-overview-chart-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--pf-global--Color--200);
+    font-size: 0.9rem;
+}
+
+@media (max-width: 900px) {
+    .zfs-overview-cards {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+@media (max-width: 600px) {
+    .zfs-overview-ct > header,
+    .zfs-overview-chart-header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .zfs-overview-cards {
+        grid-template-columns: 1fr;
+    }
+
+    .zfs-overview-chart-card {
+        grid-column: auto;
+    }
+
+    .zfs-overview-chart-values {
+        flex-wrap: wrap;
+        gap: 0.5rem 1rem;
+    }
+}

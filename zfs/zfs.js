@@ -152,6 +152,7 @@ function FnFirstSteps() {
     FnCockpitPermissionsGet();
 
     FnModalsRegister();
+    ZFSOverview.init();
     FnStoragePoolsGet();
 
     FnVersionWarning();
@@ -1101,6 +1102,8 @@ function FnStoragePoolsGet() {
         empty: true
     };
 
+    ZFSOverview.reset();
+
     //Disable storage pool status auto refresh
     zfsmanager.zfs.storagepool.refreshid.forEach((_value, _index) => {
         clearInterval(_value);
@@ -1148,6 +1151,8 @@ function FnStoragePoolsGet() {
                     }, 200);
 
                     $("#btn-storagepools-refresh").prop("disabled", false);
+
+                    ZFSOverview.refresh();
 
                     FnCockpitElementsUpdate();
                 });
@@ -1233,6 +1238,17 @@ function FnStoragePoolsGetCommand(process = { data, message }) {
                 }
             }
         }
+
+        ZFSOverview.registerPool({
+            id: pool.id,
+            name: pool.name,
+            health: pool.health,
+            size: pool.properties[3],
+            allocated: pool.properties[4],
+            free: pool.properties[5],
+            fragmentation: pool.fragmentation,
+            autotrim: pool.autotrim
+        });
 
         $("#modals-storagepool-" + pool.id).remove();
         $("#modals").append(`<div id="modals-storagepool-` + pool.id + `"></div>`);
@@ -4251,6 +4267,17 @@ function FnStoragePoolRefreshCommand(pool = { name, id }) {
                     }
                 }
             }
+
+            ZFSOverview.updatePool({
+                id: pool.id,
+                name: pool.name,
+                health: pool.health,
+                size: pool.properties[2],
+                allocated: pool.properties[3],
+                free: pool.properties[4],
+                fragmentation: pool.fragmentation,
+                autotrim: pool.autotrim
+            });
 
             if (pool.upgrade) {
                 $("#span-storagepool-upgrade-" + pool.id).removeClass("hidden");
