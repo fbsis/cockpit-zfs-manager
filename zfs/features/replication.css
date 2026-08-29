@@ -186,6 +186,27 @@
     justify-content: space-between;
 }
 
+.replication-ct-footer {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    text-align: left;
+}
+
+.replication-ct-footer .replication-ct-danger-action {
+    margin-right: auto;
+}
+
+.replication-ct-footer .dialog-wait-ct {
+    float: none !important;
+    margin: 0;
+}
+
+.replication-ct-footer .modal-ct-buttons {
+    margin-left: auto;
+    white-space: nowrap;
+}
+
 .replication-ct-job-status {
     margin-bottom: 0.75rem;
     padding: 0.75rem;
@@ -216,6 +237,19 @@
 }
 
 @media screen and (max-width: 640px) {
+    .replication-ct-footer {
+        flex-wrap: wrap;
+    }
+
+    .replication-ct-footer .replication-ct-danger-action {
+        width: 100%;
+    }
+
+    .replication-ct-footer .modal-ct-buttons {
+        margin-left: auto;
+        white-space: normal;
+    }
+
     .replication-ct-rules-heading {
         flex-direction: column;
     }

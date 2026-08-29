@@ -464,8 +464,10 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         <pre id="replication-task-logs-${filesystem.id}" class="replication-ct-log">Open this step or click Refresh logs to inspect the service.</pre>
                     </section>
                 </div>
-                <div class="modal-footer">
-                    <div></div>
+                <div class="modal-footer replication-ct-footer">
+                    <div class="replication-ct-danger-action">
+                        ${filesystem.replicationtask ? `<button id="btn-storagepool-replication-task-delete-${filesystem.id}" class="btn btn-danger apply privileged-modal" tabindex="-1" type="button">Delete Replication Task</button>` : ''}
+                    </div>
                     <div id="spinner-storagepool-replication-task-configure-` + filesystem.id + `" class="dialog-wait-ct pull-left hidden">
                         <div class="spinner spinner-sm"></div><span></span>
                     </div>
@@ -473,7 +475,6 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         <button class="btn btn-default cancel" data-dismiss="modal" tabindex="-1">Cancel</button>
                         <button id="btn-replication-task-back-${filesystem.id}" class="btn btn-default hidden" type="button">Back</button>
                         <button id="btn-replication-task-next-${filesystem.id}" class="btn btn-primary" type="button">Next</button>
-                        ${filesystem.replicationtask ? `<button id="btn-storagepool-replication-task-delete-${filesystem.id}" class="btn btn-danger apply privileged-modal" tabindex="-1">Delete</button>` : ''}
                         <button id="btn-storagepool-replication-task-configure-run-` + filesystem.id + `" class="btn btn-primary apply privileged-modal hidden" tabindex="-1" type="button">Apply configuration</button>
                         <button id="btn-storagepool-replication-task-apply-run-now-` + filesystem.id + `" class="btn btn-primary apply privileged-modal hidden" tabindex="-1" type="button">Apply &amp; run now</button>
                     </div>
@@ -1356,8 +1357,37 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                 });
 
                 $("#btn-storagepool-replication-task-delete-${filesystem.id}").on("click", () => {
+                    let sourcePool = ${JSON.stringify(pool.name)};
+                    let sourceDataset = ${JSON.stringify(filesystem.name)};
+                    let confirmed = window.confirm(
+                        "Delete the replication task for " + sourceDataset + "?\\n\\n" +
+                        "This removes its znapzend replication configuration. Existing datasets and snapshots are not deleted."
+                    );
+                    if (!confirmed) {
+                        $("#replication-task-operation-log-${filesystem.id}").text("Replication task deletion canceled. No changes were made.");
+                        return;
+                    }
+
+                    let typedPool = window.prompt(
+                        "To confirm deletion, type the exact source pool name shown below:\\n\\n" + sourcePool,
+                        ""
+                    );
+                    if (typedPool !== sourcePool) {
+                        let cancellationMessage = typedPool === null
+                            ? "Replication task deletion canceled. No changes were made."
+                            : "Replication task deletion canceled because the pool name did not match " + sourcePool + ".";
+                        $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text(cancellationMessage);
+                        $("#replication-task-operation-log-${filesystem.id}").text(cancellationMessage);
+                        if (typedPool !== null) {
+                            FnDisplayAlert({ status: "warning", title: "Replication task was not deleted", description: "Enter the exact source pool name to confirm deletion.", breakword: false }, { name: "replicationtask-delete-confirmation" });
+                        }
+                        return;
+                    }
+
                     let command = [${JSON.stringify(znapzendSetupCommand || 'znapzendzetup')}, 'delete', '${filesystem.name}'];
 
+                    $("#replication-task-validation-${filesystem.id}").addClass("hidden").empty();
+                    $("#btn-storagepool-replication-task-configure-run-${filesystem.id}, #btn-storagepool-replication-task-apply-run-now-${filesystem.id}, #btn-storagepool-replication-task-delete-${filesystem.id}").prop("disabled", true);
                     $("#spinner-storagepool-replication-task-configure-${filesystem.id}").removeClass("hidden");
                     $("#spinner-storagepool-replication-task-configure-${filesystem.id} span").text("Deleting replication task...");
 
@@ -1373,6 +1403,7 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                         let details = [output, replicationErrorText(error)].filter(Boolean).join("\\n").trim();
                         FnReplicationWizardShowStep("#modal-storagepool-replication-task-configure-${filesystem.id}", 4);
                         $("#spinner-storagepool-replication-task-configure-${filesystem.id}").addClass("hidden");
+                        $("#btn-storagepool-replication-task-configure-run-${filesystem.id}, #btn-storagepool-replication-task-apply-run-now-${filesystem.id}, #btn-storagepool-replication-task-delete-${filesystem.id}").prop("disabled", false);
                         $("#replication-task-validation-${filesystem.id}").removeClass("hidden").text("znapzend could not delete this configuration. Review the detailed output below.");
                         $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Delete failed.\\n\\nCommand:\\n" + command.join(" ") + "\\n\\nError:\\n" + details);
                         FnDisplayAlert({ status: "danger", title: "Replication task could not be deleted", description: "The detailed znapzend error is available in Review & Logs.", breakword: false }, { name: "replicationtask-delete" });
