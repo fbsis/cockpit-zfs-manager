@@ -231,6 +231,58 @@
     border-left-color: var(--pf-global--danger-color--100);
 }
 
+.replication-ct-list-cell {
+    min-width: 12rem;
+}
+
+.replication-ct-list-status {
+    display: inline-flex;
+    gap: 0.55rem;
+    align-items: center;
+    vertical-align: middle;
+}
+
+.replication-ct-list-icon {
+    flex: none;
+    font-size: 0.85rem;
+}
+
+.replication-ct-list-icon-ok {
+    color: var(--pf-global--success-color--100);
+}
+
+.replication-ct-list-icon-off {
+    color: var(--pf-global--danger-color--100);
+}
+
+.replication-ct-list-details {
+    display: inline-flex;
+    min-width: 0;
+    flex-direction: column;
+    line-height: 1.2;
+}
+
+.replication-ct-list-details small {
+    margin-top: 0.2rem;
+    color: var(--pf-global--Color--200);
+    font-size: 0.75rem;
+    white-space: nowrap;
+}
+
+.replication-ct-list-error {
+    min-width: 2rem;
+    padding: 0.25rem 0.5rem;
+    color: var(--pf-global--danger-color--100);
+    border: 1px solid var(--pf-global--danger-color--100);
+    border-radius: 3px;
+}
+
+.replication-ct-list-error:focus,
+.replication-ct-list-error:hover {
+    color: var(--pf-global--danger-color--200, var(--pf-global--danger-color--100));
+    background: var(--pf-global--BackgroundColor--150);
+}
+
 .replication-ct-log {
     max-height: 15rem;
     padding: 0.75rem;

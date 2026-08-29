@@ -4949,6 +4949,7 @@ async function FnFileSystemsGetCommand(pool = { name, id, altroot: false, boot: 
             origin: "",
             readonly: false,
             recordsize: "",
+            replicationstatus: null,
             shares: [],
             sharenfs: false,
             sharesmb: false,
@@ -4957,6 +4958,7 @@ async function FnFileSystemsGetCommand(pool = { name, id, altroot: false, boot: 
         };
 
         let existingReplicationTask = null;
+        let replicationTaskLookupError = "";
 
         try {
             let command = ['znapzendzetup', 'list', filesystem.properties[1]];
@@ -4969,9 +4971,16 @@ async function FnFileSystemsGetCommand(pool = { name, id, altroot: false, boot: 
                 existingReplicationTask = true;
             }
         } catch (error) {
-            console.log('error', error);
+            let details = [error && error.message, error && error.problem].filter(Boolean).join(" ");
+            if (details.toLowerCase().includes('cannot list backup config')) {
+                existingReplicationTask = false;
+            } else {
+                replicationTaskLookupError = details || "znapzendzetup could not read the replication configuration.";
+                console.log('error', error);
+            }
         }
 
+        filesystem.replicationstatus = await FnReplicationTaskListStatus(filesystem.properties[1], existingReplicationTask, replicationTaskLookupError);
         filesystem.properties.splice(13, 0, typeof existingReplicationTask !== 'boolean' ? 'Error' : existingReplicationTask ? 'Yes' : 'No');
 
         filesystem.output = `<tr>`;
@@ -5108,17 +5117,8 @@ async function FnFileSystemsGetCommand(pool = { name, id, altroot: false, boot: 
 
                     break;
                 case 13: //13=replication task
-                    if (__value.toLowerCase() == "yes") {
-                        filesystem.replicationtask = true;
-                    } else {
-                        filesystem.replicationtask = false;
-                    }
-
-                    if (/yes|no/gi.test(__value)) {
-                        __value = __value.charAt(0).toUpperCase() + __value.slice(1);
-                    }
-
-                    filesystem.output += `<td><span class="table-ct-head">Replicated:</span>` + __value + `</td>`;
+                    filesystem.replicationtask = filesystem.replicationstatus.configured;
+                    filesystem.output += FnReplicationTaskRenderListStatus(filesystem.replicationstatus, filesystem.id);
 
                     break;
                 case 14: //14=origin

@@ -38,6 +38,12 @@ $(document).on("click", ".replication-ct-steps li", function () {
     FnReplicationWizardShowStep($(this).closest(".modal"), Number($(this).attr("data-step")));
 });
 
+$(document).on("click", ".replication-ct-list-error", function (event) {
+    event.preventDefault();
+    let configureButton = $(this).attr("data-configure-button");
+    if (configureButton) $(configureButton).trigger("click");
+});
+
 function znapzendUnitForReload(x) {
     if (x.match(/second/gi)) return 'Second';
     if (x.match(/minute/gi)) return 'Minute';
@@ -93,6 +99,117 @@ function replicationEscapeHtml(value) {
         '"': '&quot;',
         "'": '&#39;',
     })[character]);
+}
+
+function zfsReplicationJobHash(value) {
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index++) {
+        hash ^= value.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function zfsReplicationJobId(sourceDataset) {
+    let slug = String(sourceDataset || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 36) || "dataset";
+    return slug + "-" + zfsReplicationJobHash(String(sourceDataset || ""));
+}
+
+function zfsReplicationJobStatePath(sourceDataset) {
+    return "/var/lib/cockpit-zfs-manager/replication-jobs/" + zfsReplicationJobId(sourceDataset) + ".state";
+}
+
+function zfsReplicationParseProperties(output) {
+    return String(output || "").split("\n").reduce((properties, line) => {
+        let separator = line.indexOf("=");
+        if (separator > 0) properties[line.slice(0, separator)] = line.slice(separator + 1);
+        return properties;
+    }, {});
+}
+
+async function FnReplicationTaskListStatus(dataset, configured, configurationError) {
+    let status = {
+        configured: configured === true,
+        error: configured !== true && configured !== false,
+        errorMessage: configurationError || "",
+        running: false,
+        lastEpoch: 0,
+    };
+
+    if (!status.configured) {
+        if (status.error && !status.errorMessage) status.errorMessage = "Unable to determine whether the replication task is configured.";
+        return status;
+    }
+
+    let jobState = null;
+    try {
+        let stateOutput = await cockpit.spawn(['/usr/bin/cat', zfsReplicationJobStatePath(dataset)], { err: "out", superuser: "try" });
+        jobState = zfsReplicationParseProperties(stateOutput);
+    } catch (error) {
+        // A state file is created only after the first background run.
+    }
+
+    if (jobState) {
+        if (jobState.status === "succeeded") status.lastEpoch = Number(jobState.finished_at) || 0;
+        if (jobState.status === "failed") {
+            status.error = true;
+            status.errorMessage = "The latest background replication failed" + (jobState.phase ? " during " + jobState.phase : "") + (jobState.exit_code ? " (exit " + jobState.exit_code + ")" : "") + ".";
+        }
+        if (jobState.status === "queued" || jobState.status === "running") {
+            status.running = true;
+            try {
+                let unitOutput = await cockpit.spawn(['/usr/bin/systemctl', 'show', jobState.unit, '--property=ActiveState'], { err: "out", superuser: "try" });
+                let unitState = zfsReplicationParseProperties(unitOutput);
+                let active = unitState.ActiveState === "active" || unitState.ActiveState === "activating" || unitState.ActiveState === "reloading";
+                let stateAge = Math.floor(Date.now() / 1000) - Number(jobState.started_at || 0);
+                if (!active && stateAge > 10) {
+                    status.running = false;
+                    status.error = true;
+                    status.errorMessage = "The latest background replication was interrupted before completion.";
+                }
+            } catch (error) {
+                let stateAge = Math.floor(Date.now() / 1000) - Number(jobState.started_at || 0);
+                if (stateAge > 10) {
+                    status.running = false;
+                    status.error = true;
+                    status.errorMessage = "The latest background replication unit could not be found.";
+                }
+            }
+        }
+    }
+
+    try {
+        let snapshotOutput = await cockpit.spawn(['/sbin/zfs', 'list', '-H', '-p', '-t', 'snapshot', '-r', dataset, '-o', 'name,creation', '-s', 'creation'], { err: "out", superuser: "try" });
+        let prefix = dataset + "@";
+        String(snapshotOutput || "").split("\n").forEach(line => {
+            let fields = line.trim().split(/\s+/);
+            if (fields[0] && fields[0].startsWith(prefix)) status.lastEpoch = Math.max(status.lastEpoch, Number(fields[1]) || 0);
+        });
+    } catch (error) {
+        let details = [error && error.message, error && error.problem].filter(Boolean).join(" ").toLowerCase();
+        if (!details.includes("no datasets available")) {
+            status.error = true;
+            if (!status.errorMessage) status.errorMessage = "The replication task exists, but its latest snapshot date could not be read.";
+        }
+    }
+
+    return status;
+}
+
+function FnReplicationTaskRenderListStatus(status, filesystemId) {
+    let lastText = status.lastEpoch > 0 ? "Last: " + new Date(status.lastEpoch * 1000).toLocaleString() : "Never run";
+    let content;
+
+    if (status.error) {
+        let errorMessage = status.errorMessage || "Replication error";
+        content = `<button class="btn btn-link replication-ct-list-error" data-configure-button="#btn-storagepool-replication-task-configure-${replicationEscapeHtml(filesystemId)}" title="${replicationEscapeHtml(errorMessage)}" type="button"><span aria-hidden="true" class="fa fa-exclamation-triangle"></span><span class="sr-only">Open replication error</span></button><span class="replication-ct-list-details"><strong>Error</strong><small>${replicationEscapeHtml(lastText)}</small></span>`;
+    } else if (status.configured) {
+        content = `<span aria-hidden="true" class="fa fa-circle replication-ct-list-icon replication-ct-list-icon-ok"></span><span class="replication-ct-list-details"><strong>${status.running ? "Running" : "Configured"}</strong><small>${replicationEscapeHtml(lastText)}</small></span>`;
+    } else {
+        content = `<span aria-hidden="true" class="fa fa-circle replication-ct-list-icon replication-ct-list-icon-off"></span><span class="replication-ct-list-details"><strong>Not configured</strong></span>`;
+    }
+
+    return `<td class="replication-ct-list-cell"><span class="table-ct-head">Replication:</span><span class="replication-ct-list-status">${content}</span></td>`;
 }
 
 async function replicationFindExecutable(name, candidates) {
@@ -510,30 +627,16 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
                 let replicationJobStatusTimer = null;
                 let replicationJobLaunchPendingUntil = 0;
 
-                function replicationJobHash(value) {
-                    let hash = 2166136261;
-                    for (let index = 0; index < value.length; index++) {
-                        hash ^= value.charCodeAt(index);
-                        hash = Math.imul(hash, 16777619);
-                    }
-                    return (hash >>> 0).toString(16).padStart(8, "0");
-                }
-
                 function replicationJobId() {
-                    let slug = replicationJobSource.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 36) || "dataset";
-                    return slug + "-" + replicationJobHash(replicationJobSource);
+                    return zfsReplicationJobId(replicationJobSource);
                 }
 
                 function replicationJobStatePath() {
-                    return "/var/lib/cockpit-zfs-manager/replication-jobs/" + replicationJobId() + ".state";
+                    return zfsReplicationJobStatePath(replicationJobSource);
                 }
 
                 function replicationParseProperties(output) {
-                    return String(output || "").split("\\n").reduce((properties, line) => {
-                        let separator = line.indexOf("=");
-                        if (separator > 0) properties[line.slice(0, separator)] = line.slice(separator + 1);
-                        return properties;
-                    }, {});
+                    return zfsReplicationParseProperties(output);
                 }
 
                 function replicationJobPhaseLabel(phase) {
@@ -1395,7 +1498,12 @@ async function FnModalReplicationTaskCreateContent(pool, filesystem, modal) {
 
                     $("#replication-task-operation-log-${filesystem.id}").text("[" + new Date().toLocaleString() + "] Running:\\n" + command.join(" ") + "\\n\\nWaiting for znapzendzetup...");
 
-                    process.then(data => {
+                    process.then(async data => {
+                        try {
+                            await replicationSpawn(['/usr/bin/rm', '-f', zfsReplicationJobStatePath(sourceDataset)], { err: "out", superuser: "require" });
+                        } catch (error) {
+                            // The replication configuration was deleted successfully; stale UI state is non-critical.
+                        }
                         FnReplicationTaskDelete({ name: '${filesystem.name}' }, { name: '${pool.name}', id: '${pool.id}' }, { tag: '${modal.tag}' });
                     });
 
